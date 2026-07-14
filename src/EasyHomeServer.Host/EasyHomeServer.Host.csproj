@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>EasyHomeServer.Host</RootNamespace>
+    <AssemblyName>EasyHomeServer.Host</AssemblyName>
+    <Version>$(EasyHomeServerVersion)</Version>
+    <UserSecretsId>easyhomeserver-host</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      The host ships the runtime copy of the SDK and MudBlazor; modules reference them
+      compile-time only and share these instances at runtime. See PluginLoadContext.
+    -->
+    <ProjectReference Include="../EasyHomeServer.Sdk/EasyHomeServer.Sdk.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MudBlazor" Version="9.7.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.10" />
+    <!--
+      EF Core 10.0.10 pulls SQLitePCLRaw 2.1.11, whose bundled SQLite is affected by
+      GHSA-2m69-gcr7-jv3q (high). Pinning the bundle forward to the first fixed version;
+      remove once EF Core's own dependency catches up.
+    -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.10">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <!-- Reads the file manifest that modules embed alongside their wwwroot. -->
+    <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" Version="10.0.10" />
+    <!-- Type=notify readiness and journald-formatted logs. No-op when not run under systemd. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.10" />
+  </ItemGroup>
+
+</Project>

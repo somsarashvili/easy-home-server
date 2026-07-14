@@ -1,0 +1,48 @@
+@inject ModuleCatalog Catalog
+@inject HostInfo HostInfo
+
+@* The nav is a projection of the module catalog: nothing here is hard-coded per module, so
+   installing a module .deb and restarting is all it takes to appear. *@
+
+<MudNavMenu Class="pt-2">
+    <MudNavLink Href="/" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Dashboard">
+        Dashboard
+    </MudNavLink>
+
+    @if (Catalog.Modules.Length > 0)
+    {
+        <MudDivider Class="my-2" />
+
+        @foreach (var module in Catalog.Modules)
+        {
+            @* mud-width-full is required, not cosmetic: MudTooltip wraps its child in an
+               inline-block div, which collapses to the label's width and leaves the nav link's
+               hover and active highlight stopping short of the drawer edge. MudBlazor's own
+               rule — .mud-tooltip-root.mud-tooltip-inline:has(>.mud-width-full) — promotes the
+               wrapper to a full-width block when the child opts in this way. *@
+            <MudTooltip Text="@module.Manifest.Description" Placement="Placement.Right" Disabled="@(module.Manifest.Description is null)">
+                <MudNavLink Href="@module.Manifest.RoutePath"
+                            Match="NavLinkMatch.Prefix"
+                            Icon="@module.Manifest.Icon"
+                            Class="mud-width-full">
+                    @module.Manifest.DisplayName
+                </MudNavLink>
+            </MudTooltip>
+        }
+    }
+
+    @if (Catalog.Failures.Length > 0)
+    {
+        <MudDivider Class="my-2" />
+
+        <MudNavLink Href="/" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.ErrorOutline" IconColor="Color.Error">
+            @Catalog.Failures.Length module@(Catalog.Failures.Length == 1 ? "" : "s") failed
+        </MudNavLink>
+    }
+</MudNavMenu>
+
+<div class="nav-footer">
+    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+        EasyHomeServer @HostInfo.Version &middot; SDK @HostInfo.SdkContractVersion
+    </MudText>
+</div>

@@ -1,0 +1,32 @@
+#!/bin/sh
+# Runs after a module package is unpacked and configured.
+#
+# Templated by build.sh: @MODULE_ID@ is replaced with the module's id.
+set -e
+
+case "$1" in
+  configure)
+    # The host scans the modules directory once, at startup, and loads each assembly into its
+    # own load context. There is deliberately no hot-load path, so a newly installed module is
+    # invisible until the process restarts.
+    if [ -d /run/systemd/system ]; then
+      if systemctl is-active --quiet easyhomeserver.service; then
+        echo "Restarting easyhomeserver to pick up the @MODULE_ID@ module."
+        systemctl restart easyhomeserver.service || true
+      else
+        # Installing a module before the host is running is normal (or the admin stopped it
+        # on purpose); starting it here would override that choice.
+        echo "easyhomeserver is not running; the @MODULE_ID@ module loads on next start."
+      fi
+    fi
+    ;;
+
+  abort-upgrade | abort-remove | abort-deconfigure) ;;
+
+  *)
+    echo "postinst called with unknown argument '$1'" >&2
+    exit 1
+    ;;
+esac
+
+exit 0

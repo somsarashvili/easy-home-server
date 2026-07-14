@@ -1,0 +1,85 @@
+@page "/"
+@inject ModuleCatalog Catalog
+@inject HostInfo HostInfo
+
+<PageTitle>Dashboard &middot; @HostInfo.HostName</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">@HostInfo.HostName</MudText>
+<MudText Typo="Typo.body1" Class="mud-text-secondary mb-6">
+    EasyHomeServer @HostInfo.Version, providing SDK contract version @HostInfo.SdkContractVersion to modules.
+</MudText>
+
+@* Load failures are shown first and in full. A module that silently vanished from the nav is
+   the worst outcome: the reason it failed is the one thing the operator needs. *@
+@if (Catalog.Failures.Length > 0)
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-6" NoIcon="false">
+        <MudText Typo="Typo.subtitle1" Class="mb-2">
+            @Catalog.Failures.Length module@(Catalog.Failures.Length == 1 ? "" : "s") could not be loaded
+        </MudText>
+
+        @foreach (var failure in Catalog.Failures)
+        {
+            <div class="mb-3">
+                <MudText Typo="Typo.body2"><b>@failure.Name</b> — @DescribeKind(failure.Kind)</MudText>
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">@failure.Reason</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">@failure.Path</MudText>
+            </div>
+        }
+    </MudAlert>
+}
+
+@if (Catalog.Modules.Length == 0)
+{
+    <MudPaper Class="pa-8 d-flex flex-column align-center" Elevation="0">
+        <MudIcon Icon="@Icons.Material.Filled.Extension" Size="Size.Large" Class="mud-text-secondary mb-3" />
+        <MudText Typo="Typo.h6" GutterBottom="true">No modules installed</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary" Align="Align.Center">
+            The host is running normally. Install a module package — for example
+            <code>easyhomeserver-module-systeminfo.deb</code> — and restart the service to see it here.
+        </MudText>
+    </MudPaper>
+}
+else
+{
+    <MudGrid>
+        @foreach (var module in Catalog.Modules)
+        {
+            <MudItem xs="12" sm="6" md="4">
+                <MudCard Class="h-100" Elevation="0">
+                    <MudCardContent>
+                        <div class="d-flex align-center mb-2">
+                            <MudIcon Icon="@module.Manifest.Icon" Color="Color.Primary" Class="mr-3" />
+                            <MudText Typo="Typo.h6">@module.Manifest.DisplayName</MudText>
+                        </div>
+
+                        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                            @(module.Manifest.Description ?? "No description provided.")
+                        </MudText>
+
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-3">
+                            Version @module.Manifest.Version &middot; SDK @module.SdkVersion.Major
+                        </MudText>
+                    </MudCardContent>
+                    <MudCardActions>
+                        <MudButton Href="@module.Manifest.RoutePath" Variant="Variant.Text" Color="Color.Primary">
+                            Open
+                        </MudButton>
+                    </MudCardActions>
+                </MudCard>
+            </MudItem>
+        }
+    </MudGrid>
+}
+
+@code {
+    private static string DescribeKind(ModuleLoadFailureKind kind) => kind switch
+    {
+        ModuleLoadFailureKind.SdkVersionMismatch => "incompatible SDK version",
+        ModuleLoadFailureKind.NoModuleType => "not a module",
+        ModuleLoadFailureKind.LoadError => "failed to load",
+        ModuleLoadFailureKind.InitializationError => "failed to initialise",
+        ModuleLoadFailureKind.InvalidManifest => "invalid manifest",
+        _ => "unknown error",
+    };
+}

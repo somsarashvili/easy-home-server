@@ -1,0 +1,53 @@
+[Unit]
+Description=EasyHomeServer management tool
+Documentation=https://github.com/solo/easy-home-server
+# The tool binds a socket and reports on network interfaces, so wait for real connectivity
+# rather than merely for the network stack to exist.
+After=network-online.target
+Wants=network-online.target
+
+# Modules are third-party code loaded into this process; a crash loop must not spin the CPU.
+# These are [Unit] keys, not [Service] ones — systemd ignores them with a warning if misplaced.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+# Type=notify, not simple: the host calls UseSystemd(), so systemd learns the service is ready
+# when Kestrel is actually listening. With Type=simple, "started" would mean "process spawned"
+# and a dependent unit could race an unready socket.
+Type=notify
+ExecStart=/usr/lib/easyhomeserver/EasyHomeServer.Host
+WorkingDirectory=/usr/lib/easyhomeserver
+
+Restart=on-failure
+RestartSec=5s
+
+# Root, deliberately. This tool exists to manage the machine: the modules to come drive
+# systemd, edit BIND zone files, mount disks and reconfigure Samba. The privileged-worker split
+# noted in ISystemRunner is the real fix; until then, privilege is honestly declared here rather
+# than smuggled in with a setuid helper.
+User=root
+Group=root
+
+# Creates and chowns /var/lib/easyhomeserver on start, so the SQLite database and the
+# data-protection key ring survive across restarts and package upgrades.
+StateDirectory=easyhomeserver
+StateDirectoryMode=0700
+
+Environment=DOTNET_ENVIRONMENT=Production
+# Diagnostics and telemetry are off: this is a long-lived appliance process on someone's home
+# network, not a cloud workload.
+Environment=DOTNET_EnableDiagnostics=0
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+
+# Hardening that does not conflict with the job. Anything stricter (ProtectSystem, ProtectHome,
+# NoNewPrivileges) would break the very modules this host is being built for.
+PrivateTmp=true
+RemoveIPC=false
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=easyhomeserver
+
+[Install]
+WantedBy=multi-user.target

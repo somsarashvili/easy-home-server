@@ -1,0 +1,103 @@
+@page "/login"
+@layout EmptyLayout
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+@inject AdminAccount AdminAccount
+@inject HostInfo HostInfo
+@inject NavigationManager Navigation
+
+@* Static SSR, not interactive: signing a cookie in requires writing response headers, which
+   a component running in an already-established circuit cannot do. [ExcludeFromInteractiveRouting]
+   is what keeps this page a plain form POST. *@
+
+<PageTitle>Sign in &middot; @HostInfo.HostName</PageTitle>
+
+<div class="auth-shell">
+    <MudPaper Class="auth-card pa-8" Elevation="0">
+        <MudText Typo="Typo.h5" GutterBottom="true">@HostInfo.HostName</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-6">Sign in to manage this server.</MudText>
+
+        <EditForm Model="Input" method="post" OnValidSubmit="SignIn" FormName="login">
+            <DataAnnotationsValidator />
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-4">@_error</MudAlert>
+            }
+
+            <label class="auth-label" for="password">Password</label>
+            <InputText id="password"
+                       type="password"
+                       class="auth-input"
+                       autocomplete="current-password"
+                       autofocus
+                       @bind-Value="Input!.Password" />
+            <ValidationMessage For="() => Input!.Password" class="auth-validation" />
+
+            <button type="submit" class="auth-submit">Sign in</button>
+        </EditForm>
+    </MudPaper>
+</div>
+
+@code {
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    // Not initialised inline: on a form post the framework assigns this property, and an
+    // initializer would race that assignment (BL0008).
+    [SupplyParameterFromForm]
+    private LoginInput? Input { get; set; }
+
+    [SupplyParameterFromQuery(Name = "returnUrl")]
+    private string? ReturnUrl { get; set; }
+
+    private string? _error;
+
+    protected override void OnInitialized()
+    {
+        Input ??= new LoginInput();
+    }
+
+    private async Task SignIn()
+    {
+        if (!await AdminAccount.VerifyAsync(Input!.Password, HttpContext.RequestAborted))
+        {
+            _error = "Incorrect password.";
+
+            return;
+        }
+
+        var identity = new ClaimsIdentity(
+            [new Claim(ClaimTypes.Name, AdminAccount.UserName)],
+            CookieAuthenticationDefaults.AuthenticationScheme);
+
+        await HttpContext.SignInAsync(
+            CookieAuthenticationDefaults.AuthenticationScheme,
+            new ClaimsPrincipal(identity));
+
+        Navigation.NavigateTo(GetSafeReturnUrl());
+    }
+
+    /// <summary>
+    /// Only local paths are honoured, so a crafted <c>?returnUrl=https://elsewhere</c> link
+    /// cannot turn the login page into an open redirect.
+    /// </summary>
+    private string GetSafeReturnUrl()
+    {
+        if (string.IsNullOrEmpty(ReturnUrl))
+        {
+            return "/";
+        }
+
+        return Uri.IsWellFormedUriString(ReturnUrl, UriKind.Relative) && ReturnUrl.StartsWith('/')
+               && !ReturnUrl.StartsWith("//", StringComparison.Ordinal)
+            ? ReturnUrl
+            : "/";
+    }
+
+    private sealed class LoginInput
+    {
+        [Required(ErrorMessage = "Enter your password.")]
+        public string Password { get; set; } = string.Empty;
+    }
+}

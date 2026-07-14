@@ -1,0 +1,90 @@
+/*
+ * Served from inside the module assembly at
+ * /_content/EasyHomeServer.Modules.SystemInfo/systeminfo.css.
+ *
+ * This file is embedded as a resource (see the module .csproj) and handed out by the host's
+ * PluginStaticFileProvider. It is not copied to disk anywhere and the host has no build-time
+ * knowledge of it.
+ */
+
+.si-metric {
+    font-variant-numeric: tabular-nums;
+}
+
+.si-sparkline {
+    display: block;
+    width: 100%;
+    height: 28px;
+}
+
+.si-sparkline-empty {
+    border-bottom: 1px dashed var(--mud-palette-divider);
+    opacity: 0.5;
+}
+
+.si-sparkline-line {
+    fill: none;
+    stroke: var(--mud-palette-primary);
+    stroke-width: 1.5;
+    vector-effect: non-scaling-stroke;
+    stroke-linejoin: round;
+}
+
+.si-sparkline-fill {
+    fill: var(--mud-palette-primary);
+    fill-opacity: 0.12;
+    stroke: none;
+}
+
+/* Cores wrap into as many columns as fit; an 8-core box and a 64-core box both stay readable. */
+.si-cores {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+    gap: 0.35rem 1rem;
+}
+
+.si-core {
+    display: grid;
+    grid-template-columns: 2.6rem 1fr 3rem;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.si-core-bar {
+    height: 6px;
+}
+
+.si-core-value {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.si-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(5rem, 1fr));
+    gap: 1rem;
+}
+
+.si-table {
+    overflow-x: auto;
+}
+
+.si-numeric {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.si-usage-column {
+    min-width: 10rem;
+}
+
+.si-usage-bar {
+    flex: 1;
+    height: 6px;
+}
+
+.si-usage-value {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}

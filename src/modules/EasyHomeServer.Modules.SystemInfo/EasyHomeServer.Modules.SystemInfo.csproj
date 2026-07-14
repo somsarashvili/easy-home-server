@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <RootNamespace>EasyHomeServer.Modules.SystemInfo</RootNamespace>
+    <AssemblyName>EasyHomeServer.Modules.SystemInfo</AssemblyName>
+    <Version>$(EasyHomeServerVersion)</Version>
+
+    <!--
+      Embeds wwwroot into the assembly together with a file manifest, which is what lets the
+      host serve this module's assets at runtime. The normal static web assets pipeline is
+      resolved at the *host's* build time and cannot see an assembly discovered from disk at
+      startup. See PluginStaticFileProvider in the host.
+    -->
+    <GenerateEmbeddedFilesManifest>true</GenerateEmbeddedFilesManifest>
+
+    <!--
+      A module is loaded by path, never resolved from the host's own dependency graph, so
+      there is no static web asset or RCL packaging for it to participate in.
+    -->
+    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Remove before Include: the Razor SDK adds wwwroot to Content, which would also copy the
+      files loose into the module directory. Nothing serves them from there, so they would be
+      dead weight in the .deb — and worse, they would make it impossible to tell whether the
+      embedded-asset path actually works.
+    -->
+    <Content Remove="wwwroot\**" />
+    <EmbeddedResource Include="wwwroot\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Private="false" / ExcludeAssets="runtime": compile against the host's contracts but ship
+      none of them. The host supplies the single runtime instance of each; a second copy in the
+      module directory would load into the plugin context as a *different* type and silently
+      break both IModule discovery and MudBlazor rendering.
+    -->
+    <ProjectReference Include="../../EasyHomeServer.Sdk/EasyHomeServer.Sdk.csproj"
+                      Private="false"
+                      ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MudBlazor" Version="9.7.0" ExcludeAssets="runtime" />
+    <!-- Build-time only: supplies the manifest-embedding task, not a runtime dependency. -->
+    <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" Version="10.0.10"
+                      ExcludeAssets="runtime"
+                      PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

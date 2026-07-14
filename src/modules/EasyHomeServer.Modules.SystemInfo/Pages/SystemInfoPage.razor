@@ -1,0 +1,378 @@
+@page "/system"
+@attribute [Authorize]
+@implements IDisposable
+
+@inject IEventBus EventBus
+@inject MetricsHistory History
+@inject SystemSampler Sampler
+@inject SystemInfoOptions Options
+@inject PowerControl PowerControl
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+@* The stylesheet is embedded in this module's assembly and served by the host's plugin file
+   provider. If module static assets ever regress, this 404s and the sparklines lose their
+   styling — which makes it a live check of that mechanism, not just decoration. *@
+<link rel="stylesheet" href="_content/EasyHomeServer.Modules.SystemInfo/systeminfo.css" />
+
+<PageTitle>System Info</PageTitle>
+
+<div class="d-flex align-center justify-space-between mb-6">
+    <div>
+        <MudText Typo="Typo.h4">System Info</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            @Sampler.Identity.OperatingSystem &middot; kernel @Sampler.Identity.KernelVersion &middot; @Sampler.Identity.Architecture
+        </MudText>
+    </div>
+
+    @if (Options.AllowPowerControl)
+    {
+        <div>
+            <MudButton StartIcon="@Icons.Material.Filled.RestartAlt"
+                       Variant="Variant.Outlined"
+                       Color="Color.Warning"
+                       Disabled="_powerActionInFlight"
+                       OnClick="ConfirmReboot"
+                       Class="mr-2">
+                Reboot
+            </MudButton>
+            <MudButton StartIcon="@Icons.Material.Filled.PowerSettingsNew"
+                       Variant="Variant.Outlined"
+                       Color="Color.Error"
+                       Disabled="_powerActionInFlight"
+                       OnClick="ConfirmShutDown">
+                Shut down
+            </MudButton>
+        </div>
+    }
+</div>
+
+@if (!Sampler.IsSupported)
+{
+    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined">
+        This module reads <code>/proc</code>, which this platform does not provide. Metrics are
+        unavailable here; deploy to the Debian host to see live data.
+    </MudAlert>
+}
+else if (_snapshot is null)
+{
+    <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="my-4" />
+    <MudText Typo="Typo.body2" Class="mud-text-secondary">Waiting for the first sample…</MudText>
+}
+else
+{
+    <MudGrid>
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4 h-100" Elevation="0">
+                <div class="d-flex align-center justify-space-between">
+                    <MudText Typo="Typo.subtitle1">CPU</MudText>
+                    <MudText Typo="Typo.h5" Class="si-metric">
+                        @(_snapshot.CpuTotalPercent is { } cpu ? Format.Percent(cpu) : "—")
+                    </MudText>
+                </div>
+
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    @(Sampler.Identity.CpuModel ?? $"{Sampler.Identity.CoreCount} cores, {Sampler.Identity.Architecture}")
+                </MudText>
+
+                <div class="mt-2">
+                    <Sparkline Values="@History.Series(s => s.CpuTotalPercent)" Max="100" />
+                </div>
+
+                <div class="si-cores mt-4">
+                    @for (var i = 0; i < _snapshot.CpuPerCorePercent.Length; i++)
+                    {
+                        // Both must be per-iteration locals. A child-content RenderFragment is a
+                        // lambda invoked after the loop has finished, so capturing the loop
+                        // variable directly labels every core with the final value of i.
+                        var core = i;
+                        var usage = _snapshot.CpuPerCorePercent[i];
+
+                        <div class="si-core">
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">@($"cpu{core}")</MudText>
+                            <MudProgressLinear Color="@UsageColor(usage)" Value="@usage" Class="si-core-bar" />
+                            <MudText Typo="Typo.caption" Class="si-core-value">@Format.Percent(usage)</MudText>
+                        </div>
+                    }
+                </div>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4 h-100" Elevation="0">
+                <div class="d-flex align-center justify-space-between">
+                    <MudText Typo="Typo.subtitle1">Memory</MudText>
+                    <MudText Typo="Typo.h5" Class="si-metric">
+                        @(_snapshot.Memory is { } m ? Format.Percent(m.UsedPercent) : "—")
+                    </MudText>
+                </div>
+
+                @if (_snapshot.Memory is { } memory)
+                {
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                        @Format.Bytes(memory.UsedBytes) used of @Format.Bytes(memory.TotalBytes)
+                        &middot; @Format.Bytes(memory.CachedBytes) cached
+                    </MudText>
+
+                    <div class="mt-2">
+                        <Sparkline Values="@History.Series(s => s.Memory?.UsedPercent)" Max="100" />
+                    </div>
+
+                    <MudProgressLinear Color="@UsageColor(memory.UsedPercent)"
+                                       Value="@memory.UsedPercent"
+                                       Size="Size.Large"
+                                       Class="mt-4" />
+
+                    @if (memory.SwapTotalBytes > 0)
+                    {
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-3">
+                            Swap: @Format.Bytes(memory.SwapUsedBytes) of @Format.Bytes(memory.SwapTotalBytes)
+                        </MudText>
+                        <MudProgressLinear Color="@UsageColor(memory.SwapUsedPercent)"
+                                           Value="@memory.SwapUsedPercent"
+                                           Class="mt-1" />
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-3">No swap configured</MudText>
+                    }
+                }
+                else
+                {
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary mt-2">Unavailable.</MudText>
+                }
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4 h-100" Elevation="0">
+                <MudText Typo="Typo.subtitle1" Class="mb-3">Load &amp; uptime</MudText>
+
+                <div class="si-stats">
+                    <div>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">1 min</MudText>
+                        <MudText Typo="Typo.h6" Class="si-metric">
+                            @(_snapshot.Load is { } l1 ? Format.Load(l1.OneMinute) : "—")
+                        </MudText>
+                    </div>
+                    <div>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">5 min</MudText>
+                        <MudText Typo="Typo.h6" Class="si-metric">
+                            @(_snapshot.Load is { } l5 ? Format.Load(l5.FiveMinutes) : "—")
+                        </MudText>
+                    </div>
+                    <div>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">15 min</MudText>
+                        <MudText Typo="Typo.h6" Class="si-metric">
+                            @(_snapshot.Load is { } l15 ? Format.Load(l15.FifteenMinutes) : "—")
+                        </MudText>
+                    </div>
+                    <div>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">Uptime</MudText>
+                        <MudText Typo="Typo.h6" Class="si-metric">
+                            @(_snapshot.Uptime is { } u ? Format.Uptime(u) : "—")
+                        </MudText>
+                    </div>
+                </div>
+
+                <div class="mt-3">
+                    <Sparkline Values="@History.Series(s => s.Load?.OneMinute)" />
+                </div>
+
+                <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-2">
+                    1-minute load, last @MetricsHistory.Capacity samples. @Sampler.Identity.CoreCount cores —
+                    load above @Sampler.Identity.CoreCount means tasks are queuing.
+                </MudText>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4 h-100" Elevation="0">
+                <MudText Typo="Typo.subtitle1" Class="mb-3">Network</MudText>
+
+                @if (_snapshot.Interfaces.Length == 0)
+                {
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary">No interfaces found.</MudText>
+                }
+                else
+                {
+                    <MudSimpleTable Dense="true" Hover="true" Elevation="0" Class="si-table">
+                        <thead>
+                            <tr>
+                                <th>Interface</th>
+                                <th class="si-numeric">Down</th>
+                                <th class="si-numeric">Up</th>
+                                <th class="si-numeric">Total in</th>
+                                <th class="si-numeric">Total out</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var nic in _snapshot.Interfaces)
+                            {
+                                <tr>
+                                    <td>@nic.Name</td>
+                                    <td class="si-numeric">@Format.Rate(nic.ReceiveBytesPerSecond)</td>
+                                    <td class="si-numeric">@Format.Rate(nic.TransmitBytesPerSecond)</td>
+                                    <td class="si-numeric mud-text-secondary">@Format.Bytes(nic.TotalReceivedBytes)</td>
+                                    <td class="si-numeric mud-text-secondary">@Format.Bytes(nic.TotalTransmittedBytes)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+                }
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12">
+            <MudPaper Class="pa-4" Elevation="0">
+                <MudText Typo="Typo.subtitle1" Class="mb-3">Filesystems</MudText>
+
+                @if (_snapshot.Mounts.Length == 0)
+                {
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary">No mounted filesystems found.</MudText>
+                }
+                else
+                {
+                    <MudSimpleTable Dense="true" Hover="true" Elevation="0" Class="si-table">
+                        <thead>
+                            <tr>
+                                <th>Mount</th>
+                                <th>Device</th>
+                                <th>Type</th>
+                                <th class="si-numeric">Used</th>
+                                <th class="si-numeric">Free</th>
+                                <th class="si-numeric">Size</th>
+                                <th class="si-usage-column">Usage</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var mount in _snapshot.Mounts)
+                            {
+                                <tr>
+                                    <td><b>@mount.MountPoint</b></td>
+                                    <td class="mud-text-secondary">@mount.Device</td>
+                                    <td class="mud-text-secondary">@mount.FileSystem</td>
+                                    <td class="si-numeric">@Format.Bytes(mount.UsedBytes)</td>
+                                    <td class="si-numeric">@Format.Bytes(mount.FreeBytes)</td>
+                                    <td class="si-numeric">@Format.Bytes(mount.TotalBytes)</td>
+                                    <td class="si-usage-column">
+                                        <div class="d-flex align-center">
+                                            <MudProgressLinear Color="@UsageColor(mount.UsedPercent)"
+                                                               Value="@mount.UsedPercent"
+                                                               Class="si-usage-bar" />
+                                            <MudText Typo="Typo.caption" Class="ml-2 si-usage-value">
+                                                @Format.Percent(mount.UsedPercent)
+                                            </MudText>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+                }
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-4">
+        Sampled every @Options.SampleIntervalSeconds.ToString("0.#")s &middot; last update
+        @_snapshot.TimestampUtc.ToLocalTime().ToString("HH:mm:ss")
+    </MudText>
+}
+
+@code {
+    private IDisposable? _subscription;
+    private SystemSnapshot? _snapshot;
+    private bool _powerActionInFlight;
+
+    protected override void OnInitialized()
+    {
+        // Render immediately from history rather than showing a spinner until the next tick —
+        // the sampler has been running since startup, so there is almost always a sample ready.
+        _snapshot = History.Latest;
+
+        _subscription = EventBus.Subscribe<SystemSnapshot>(OnSnapshot);
+    }
+
+    private Task OnSnapshot(SystemSnapshot snapshot, CancellationToken cancellationToken)
+    {
+        _snapshot = snapshot;
+
+        // The sampler publishes from its own background thread; InvokeAsync marshals back onto
+        // the circuit's synchronisation context, which is required before touching render state.
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private static Color UsageColor(double percent) => percent switch
+    {
+        >= 90 => Color.Error,
+        >= 75 => Color.Warning,
+        _ => Color.Primary,
+    };
+
+    private async Task ConfirmReboot()
+    {
+        await ConfirmPowerAction(
+            "Reboot this server?",
+            "Every service on this machine stops, including this management tool. It will be back once the machine finishes booting.",
+            "Reboot",
+            () => PowerControl.RebootAsync());
+    }
+
+    private async Task ConfirmShutDown()
+    {
+        await ConfirmPowerAction(
+            "Shut this server down?",
+            "The machine powers off and cannot be started again from here — it needs physical access or wake-on-LAN.",
+            "Shut down",
+            () => PowerControl.ShutDownAsync());
+    }
+
+    private async Task ConfirmPowerAction(
+        string message,
+        string detail,
+        string confirmText,
+        Func<Task<PowerActionResult>> action)
+    {
+        var parameters = new DialogParameters<ConfirmDialog>
+        {
+            { x => x.Message, message },
+            { x => x.Detail, detail },
+            { x => x.ConfirmText, confirmText },
+        };
+
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>(confirmText, parameters);
+        var result = await dialog.Result;
+
+        if (result is null || result.Canceled)
+        {
+            return;
+        }
+
+        _powerActionInFlight = true;
+
+        try
+        {
+            var outcome = await action();
+
+            Snackbar.Add(outcome.Message, outcome.Succeeded ? Severity.Info : Severity.Error);
+
+            // On success the machine is going away; leaving the buttons disabled avoids a
+            // second request racing the shutdown.
+            _powerActionInFlight = outcome.Succeeded;
+        }
+        catch (Exception)
+        {
+            _powerActionInFlight = false;
+
+            throw;
+        }
+    }
+
+    public void Dispose()
+    {
+        // Without this the bus holds a reference to this component for the life of the process,
+        // and every closed tab leaks a circuit that still re-renders on each sample.
+        _subscription?.Dispose();
+    }
+}

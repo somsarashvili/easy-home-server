@@ -1,0 +1,8 @@
+@inherits LayoutComponentBase
+
+@* Chromeless layout for the pages reachable before sign-in. It still needs its own theme
+   provider: MainLayout's is not in the tree here, and without one MudBlazor renders unstyled. *@
+
+<MudThemeProvider IsDarkMode="true" Theme="ShellTheme.Instance" />
+
+@Body

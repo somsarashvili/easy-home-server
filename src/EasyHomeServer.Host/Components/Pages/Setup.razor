@@ -1,0 +1,94 @@
+@page "/setup"
+@layout EmptyLayout
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+@inject AdminAccount AdminAccount
+@inject HostInfo HostInfo
+@inject NavigationManager Navigation
+
+@* Reachable only while no password exists — FirstRunSetupMiddleware redirects here until one
+   does, and away from here once one does. See the note there on why there is no default
+   password. *@
+
+<PageTitle>First-run setup &middot; @HostInfo.HostName</PageTitle>
+
+<div class="auth-shell">
+    <MudPaper Class="auth-card pa-8" Elevation="0">
+        <MudText Typo="Typo.h5" GutterBottom="true">Set an admin password</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-6">
+            This server has no password yet. Choose one to finish setting up @HostInfo.HostName.
+        </MudText>
+
+        <EditForm Model="Input" method="post" OnValidSubmit="CreatePassword" FormName="setup">
+            <DataAnnotationsValidator />
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-4">@_error</MudAlert>
+            }
+
+            <label class="auth-label" for="password">Password</label>
+            <InputText id="password"
+                       type="password"
+                       class="auth-input"
+                       autocomplete="new-password"
+                       autofocus
+                       @bind-Value="Input!.Password" />
+            <ValidationMessage For="() => Input!.Password" class="auth-validation" />
+
+            <label class="auth-label mt-4" for="confirm">Confirm password</label>
+            <InputText id="confirm"
+                       type="password"
+                       class="auth-input"
+                       autocomplete="new-password"
+                       @bind-Value="Input!.ConfirmPassword" />
+            <ValidationMessage For="() => Input!.ConfirmPassword" class="auth-validation" />
+
+            <button type="submit" class="auth-submit">Set password and continue</button>
+        </EditForm>
+    </MudPaper>
+</div>
+
+@code {
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    // Not initialised inline: on a form post the framework assigns this property, and an
+    // initializer would race that assignment (BL0008).
+    [SupplyParameterFromForm]
+    private SetupInput? Input { get; set; }
+
+    private string? _error;
+
+    protected override void OnInitialized()
+    {
+        Input ??= new SetupInput();
+    }
+
+    private async Task CreatePassword()
+    {
+        // Racing two setup submissions would let the second overwrite the first; re-check
+        // rather than trust the middleware's decision from earlier in the request.
+        if (await AdminAccount.IsConfiguredAsync(HttpContext.RequestAborted))
+        {
+            _error = "A password has already been set. Sign in instead.";
+
+            return;
+        }
+
+        await AdminAccount.SetPasswordAsync(Input!.Password, HttpContext.RequestAborted);
+
+        Navigation.NavigateTo("/login");
+    }
+
+    private sealed class SetupInput
+    {
+        [Required(ErrorMessage = "Choose a password.")]
+        [MinLength(8, ErrorMessage = "Use at least 8 characters.")]
+        public string Password { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Confirm the password.")]
+        [Compare(nameof(Password), ErrorMessage = "The passwords do not match.")]
+        public string ConfirmPassword { get; set; } = string.Empty;
+    }
+}

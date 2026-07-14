@@ -1,0 +1,78 @@
+@* Root document. Pages opting out of interactive routing (login, setup) render as static
+   SSR so they can complete a real form POST and sign a cookie in; everything else, including
+   all module pages, gets an interactive server circuit without having to ask for one. *@
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <link rel="stylesheet" href="_content/MudBlazor/MudBlazor.min.css" />
+    <link rel="stylesheet" href="app.css" />
+    <HeadOutlet @rendermode="RenderModeForPage" />
+</head>
+
+<body>
+    <Routes @rendermode="RenderModeForPage" />
+
+    @* Blazor's reconnect dialog. Supplying an element with this exact id is the only way to
+       theme it: with no such element, blazor.web.js builds its own dialog inside a shadow root,
+       whose styles are encapsulated and unreachable from any stylesheet — hence the white box
+       on a dark page. When the element exists, Blazor drives it purely by toggling classes
+       (components-reconnect-show / -retrying / -paused / -failed / -rejected /
+       -resume-failed) and by writing into the well-known span ids below. Every state it can
+       toggle is styled in app.css; anything missed would render as an empty dialog. *@
+    <div id="components-reconnect-modal" data-nosnippet>
+        <div class="reconnect-dialog">
+            <div class="reconnect-spinner"></div>
+
+            <p class="reconnect-message reconnect-when-show">Connection lost. Rejoining&hellip;</p>
+
+            <p class="reconnect-message reconnect-when-retrying">
+                Connection lost. Retrying in <span id="components-seconds-to-next-attempt"></span>s
+                (attempt <span id="components-reconnect-current-attempt"></span>
+                of <span id="components-reconnect-max-retries"></span>)&hellip;
+            </p>
+
+            <p class="reconnect-message reconnect-when-paused">
+                Paused. Reconnecting when this page is visible again&hellip;
+            </p>
+
+            <p class="reconnect-message reconnect-when-failed">
+                Could not reconnect to the server. It may be restarting or rebooting.
+            </p>
+
+            <p class="reconnect-message reconnect-when-rejected">
+                Rejoined, but the server had already released this session. Reload to continue.
+            </p>
+
+            <p class="reconnect-message reconnect-when-resume-failed">
+                Could not resume this session. Reload to continue.
+            </p>
+
+            <button type="button" class="reconnect-button" onclick="location.reload()">Reload</button>
+        </div>
+    </div>
+
+    <div id="blazor-error-ui" data-nosnippet>
+        Lost connection to the server.
+        <a href="" class="reload">Reload</a>
+        <span class="dismiss">🗙</span>
+    </div>
+
+    <script src="_content/MudBlazor/MudBlazor.min.js"></script>
+    <script src="_framework/blazor.web.js"></script>
+</body>
+
+</html>
+
+@code {
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    private IComponentRenderMode? RenderModeForPage =>
+        HttpContext.AcceptsInteractiveRouting() ? InteractiveServer : null;
+}

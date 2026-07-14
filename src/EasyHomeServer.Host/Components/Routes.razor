@@ -1,0 +1,30 @@
+@inject ModuleCatalog Catalog
+
+@* AdditionalAssemblies is what makes module pages routable: the host has no compile-time
+   reference to any module, so the router is told about their assemblies at runtime. *@
+<Router AppAssembly="@typeof(App).Assembly" AdditionalAssemblies="@Catalog.ComponentAssemblies">
+    <Found Context="routeData">
+        <AuthorizeRouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)">
+            <NotAuthorized>
+                <RedirectToLogin />
+            </NotAuthorized>
+        </AuthorizeRouteView>
+        <FocusOnNavigate RouteData="@routeData" Selector="h1" />
+    </Found>
+    <NotFound>
+        <LayoutView Layout="@typeof(MainLayout)">
+            <MudContainer MaxWidth="MaxWidth.Small" Class="mt-16">
+                <MudPaper Class="pa-8" Elevation="0">
+                    <MudText Typo="Typo.h5" GutterBottom="true">Page not found</MudText>
+                    <MudText Typo="Typo.body1" Class="mud-text-secondary">
+                        There is nothing at this address. If you expected a module page here,
+                        check that the module loaded on the dashboard.
+                    </MudText>
+                    <MudButton Href="/" Variant="Variant.Filled" Color="Color.Primary" Class="mt-6">
+                        Back to dashboard
+                    </MudButton>
+                </MudPaper>
+            </MudContainer>
+        </LayoutView>
+    </NotFound>
+</Router>

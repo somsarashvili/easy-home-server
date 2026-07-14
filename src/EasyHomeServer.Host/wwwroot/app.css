@@ -1,0 +1,213 @@
+html, body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.nav-footer {
+    margin-top: auto;
+    padding: 1rem;
+    border-top: 1px solid var(--mud-palette-divider);
+}
+
+/* Sign-in and first-run pages. These render as static SSR, so they are styled with plain CSS
+   rather than components that would need a circuit. */
+.auth-shell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 1rem;
+    background: var(--mud-palette-background-gray);
+}
+
+.auth-card {
+    width: 100%;
+    max-width: 26rem;
+}
+
+.auth-label {
+    display: block;
+    margin-bottom: 0.4rem;
+    font-size: 0.85rem;
+    color: var(--mud-palette-text-secondary);
+}
+
+.auth-input {
+    width: 100%;
+    padding: 0.7rem 0.9rem;
+    border: 1px solid var(--mud-palette-lines-inputs);
+    border-radius: 8px;
+    background: var(--mud-palette-surface);
+    color: var(--mud-palette-text-primary);
+    font-size: 1rem;
+    box-sizing: border-box;
+}
+
+.auth-input:focus {
+    outline: none;
+    border-color: var(--mud-palette-primary);
+}
+
+.auth-validation {
+    display: block;
+    margin-top: 0.35rem;
+    font-size: 0.8rem;
+    color: var(--mud-palette-error);
+}
+
+.auth-submit {
+    width: 100%;
+    margin-top: 1.5rem;
+    padding: 0.75rem 1rem;
+    border: none;
+    border-radius: 8px;
+    background: var(--mud-palette-primary);
+    color: var(--mud-palette-primary-text);
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.auth-submit:hover {
+    filter: brightness(1.1);
+}
+
+/* Blazor reconnect dialog (#components-reconnect-modal in App.razor).
+   Blazor only toggles classes on the container; all presentation is here. It is hidden by
+   default and shown only for the states below — without the default rule it would render on
+   every page load. Palette variables are used rather than fixed colours so it follows the
+   theme, including a reboot that comes back in light mode. */
+#components-reconnect-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(2px);
+}
+
+#components-reconnect-modal.components-reconnect-show,
+#components-reconnect-modal.components-reconnect-retrying,
+#components-reconnect-modal.components-reconnect-paused,
+#components-reconnect-modal.components-reconnect-failed,
+#components-reconnect-modal.components-reconnect-rejected,
+#components-reconnect-modal.components-reconnect-resume-failed {
+    display: flex;
+}
+
+#components-reconnect-modal .reconnect-dialog {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 20rem;
+    max-width: 26rem;
+    padding: 2rem;
+    border: 1px solid var(--mud-palette-divider);
+    border-radius: 8px;
+    background: var(--mud-palette-surface);
+    color: var(--mud-palette-text-primary);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    text-align: center;
+}
+
+#components-reconnect-modal .reconnect-message {
+    margin: 0;
+    font-size: 0.95rem;
+    line-height: 1.5;
+}
+
+/* Each message shows only in its own state. */
+#components-reconnect-modal .reconnect-message {
+    display: none;
+}
+
+#components-reconnect-modal.components-reconnect-show .reconnect-when-show,
+#components-reconnect-modal.components-reconnect-retrying .reconnect-when-retrying,
+#components-reconnect-modal.components-reconnect-paused .reconnect-when-paused,
+#components-reconnect-modal.components-reconnect-failed .reconnect-when-failed,
+#components-reconnect-modal.components-reconnect-rejected .reconnect-when-rejected,
+#components-reconnect-modal.components-reconnect-resume-failed .reconnect-when-resume-failed {
+    display: block;
+}
+
+/* "show" and "retrying" are recoverable and keep the spinner. The terminal states replace it
+   with the reload button, so a stuck spinner never implies progress that is not happening. */
+#components-reconnect-modal .reconnect-spinner {
+    width: 2.5rem;
+    height: 2.5rem;
+    margin-bottom: 1.25rem;
+    border: 3px solid var(--mud-palette-divider);
+    border-top-color: var(--mud-palette-primary);
+    border-radius: 50%;
+    animation: reconnect-spin 1s linear infinite;
+}
+
+#components-reconnect-modal .reconnect-button {
+    display: none;
+    margin-top: 1.25rem;
+    padding: 0.6rem 1.5rem;
+    border: none;
+    border-radius: 8px;
+    background: var(--mud-palette-primary);
+    color: var(--mud-palette-primary-text);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+#components-reconnect-modal .reconnect-button:hover {
+    filter: brightness(1.1);
+}
+
+#components-reconnect-modal.components-reconnect-failed .reconnect-spinner,
+#components-reconnect-modal.components-reconnect-rejected .reconnect-spinner,
+#components-reconnect-modal.components-reconnect-resume-failed .reconnect-spinner {
+    display: none;
+}
+
+#components-reconnect-modal.components-reconnect-failed .reconnect-button,
+#components-reconnect-modal.components-reconnect-rejected .reconnect-button,
+#components-reconnect-modal.components-reconnect-resume-failed .reconnect-button {
+    display: block;
+}
+
+@keyframes reconnect-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #components-reconnect-modal .reconnect-spinner {
+        animation: none;
+    }
+}
+
+/* Blazor's disconnect overlay. The default template hides this offscreen; on a box that may
+   reboot underneath you, a visible banner is the point. */
+#blazor-error-ui {
+    display: none;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 2000;
+    padding: 0.8rem 1.25rem;
+    background: #d29922;
+    color: #1a1f27;
+    box-shadow: 0 -1px 4px rgba(0, 0, 0, 0.3);
+}
+
+#blazor-error-ui .dismiss {
+    position: absolute;
+    top: 0.6rem;
+    right: 1rem;
+    cursor: pointer;
+}
+
+#blazor-error-ui .reload {
+    color: #1a1f27;
+    font-weight: 600;
+}

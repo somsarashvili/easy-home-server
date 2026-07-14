@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>EasyHomeServer.Sdk</RootNamespace>
+    <AssemblyVersion>$(EasyHomeServerSdkAssemblyVersion)</AssemblyVersion>
+    <FileVersion>$(EasyHomeServerSdkAssemblyVersion)</FileVersion>
+    <Version>$(EasyHomeServerVersion)</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      MudBlazor flows transitively to modules so their pages use the same component types
+      as the host shell. The host ships the only runtime copy; modules reference it
+      compile-time only (ExcludeAssets="runtime").
+    -->
+    <PackageReference Include="MudBlazor" Version="9.7.0" />
+  </ItemGroup>
+
+</Project>

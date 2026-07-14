@@ -1,0 +1,30 @@
+#!/bin/sh
+# Runs after a module package is removed or purged.
+#
+# Templated by build.sh: @MODULE_ID@ is replaced with the module's id.
+set -e
+
+case "$1" in
+  remove)
+    # The assembly is gone from disk but still loaded in the running process, and its nav entry
+    # still points at pages that can no longer be served. Restart to drop it.
+    if [ -d /run/systemd/system ] && systemctl is-active --quiet easyhomeserver.service; then
+      echo "Restarting easyhomeserver to unload the @MODULE_ID@ module."
+      systemctl restart easyhomeserver.service || true
+    fi
+    ;;
+
+  purge)
+    # State the module wrote via IModuleContext.DataDirectory. Purge means purge.
+    rm -rf /var/lib/easyhomeserver/modules/@MODULE_ID@
+    ;;
+
+  upgrade | failed-upgrade | abort-install | abort-upgrade | disappear) ;;
+
+  *)
+    echo "postrm called with unknown argument '$1'" >&2
+    exit 1
+    ;;
+esac
+
+exit 0

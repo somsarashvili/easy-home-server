@@ -1,0 +1,22 @@
+#!/bin/sh
+# Runs before the host package is removed.
+set -e
+
+case "$1" in
+  remove | deconfigure)
+    if [ -d /run/systemd/system ]; then
+      systemctl stop easyhomeserver.service || true
+    fi
+    ;;
+
+  # Not on upgrade: postinst restarts the service, and stopping here would take the tool down
+  # for the whole unpack rather than for the moment it takes to swap the binary.
+  upgrade | failed-upgrade) ;;
+
+  *)
+    echo "prerm called with unknown argument '$1'" >&2
+    exit 1
+    ;;
+esac
+
+exit 0

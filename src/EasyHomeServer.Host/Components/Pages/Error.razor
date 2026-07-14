@@ -1,0 +1,39 @@
+@page "/error"
+@layout EmptyLayout
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+@using System.Diagnostics
+
+<PageTitle>Error</PageTitle>
+
+<div class="auth-shell">
+    <MudPaper Class="auth-card pa-8" Elevation="0">
+        <MudText Typo="Typo.h5" Color="Color.Error" GutterBottom="true">Something went wrong</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-4">
+            An unhandled error occurred while processing your request.
+        </MudText>
+
+        @if (RequestId is not null)
+        {
+            <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mb-4">
+                Request ID: <code>@RequestId</code> — find it in <code>journalctl -u easyhomeserver</code>.
+            </MudText>
+        }
+
+        <MudButton Href="/" Variant="Variant.Filled" Color="Color.Primary">Back to dashboard</MudButton>
+    </MudPaper>
+</div>
+
+@code {
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private string? RequestId { get; set; }
+
+    protected override void OnInitialized()
+    {
+        // The id correlates the page with the logged exception without showing the visitor a
+        // stack trace.
+        RequestId = Activity.Current?.Id ?? HttpContext?.TraceIdentifier;
+    }
+}

@@ -1,0 +1,28 @@
+@* Circuit health for the top bar. Blazor's own reconnect overlay covers a dropped circuit,
+   but that only appears once the connection is already gone; this shows the steady state so
+   "the numbers stopped moving" is never ambiguous. *@
+
+<MudTooltip Text="@(_interactive ? "Live connection to the server" : "Rendering statically — not yet connected")">
+    <div class="d-flex align-center mr-2">
+        <MudIcon Icon="@Icons.Material.Filled.Circle"
+                 Size="Size.Small"
+                 Color="@(_interactive ? Color.Success : Color.Warning)" />
+        <MudText Typo="Typo.caption" Class="ml-1 d-none d-sm-flex">
+            @(_interactive ? "Connected" : "Connecting")
+        </MudText>
+    </div>
+</MudTooltip>
+
+@code {
+    private bool _interactive;
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        // OnAfterRender only runs once a circuit exists, which is exactly the signal wanted.
+        if (firstRender)
+        {
+            _interactive = true;
+            StateHasChanged();
+        }
+    }
+}

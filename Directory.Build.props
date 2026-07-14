@@ -1,0 +1,27 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!--
+    The assembly version of EasyHomeServer.Sdk is the single source of truth for
+    host/module compatibility: a module records the SDK version it was compiled against in
+    its assembly references, and the host rejects any module whose major version differs
+    from its own.
+
+    Override to test rejection:  dotnet publish -p:EasyHomeServerSdkAssemblyVersion=2.0.0.0
+  -->
+  <PropertyGroup>
+    <EasyHomeServerSdkAssemblyVersion Condition="'$(EasyHomeServerSdkAssemblyVersion)' == ''">1.0.0.0</EasyHomeServerSdkAssemblyVersion>
+    <EasyHomeServerVersion Condition="'$(EasyHomeServerVersion)' == ''">0.1.0</EasyHomeServerVersion>
+  </PropertyGroup>
+
+</Project>

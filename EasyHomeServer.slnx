@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/EasyHomeServer.Sdk/EasyHomeServer.Sdk.csproj" />
+    <Project Path="src/EasyHomeServer.Host/EasyHomeServer.Host.csproj" />
+  </Folder>
+  <Folder Name="/src/modules/">
+    <Project Path="src/modules/EasyHomeServer.Modules.SystemInfo/EasyHomeServer.Modules.SystemInfo.csproj" />
+  </Folder>
+</Solution>

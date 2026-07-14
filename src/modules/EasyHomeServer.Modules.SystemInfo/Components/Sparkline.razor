@@ -1,0 +1,69 @@
+@* Inline SVG rather than MudChart: this renders once per sample per card, and a full chart
+   component's axes, tooltips and legend are all cost with no benefit at 60x24 pixels. The
+   styling lives in the module's own stylesheet, which is served from inside this assembly. *@
+
+@if (Values.Length >= 2)
+{
+    <svg class="si-sparkline" viewBox="@($"0 0 {Width} {Height}")" preserveAspectRatio="none" aria-hidden="true">
+        <polyline class="si-sparkline-fill" points="@FillPoints" />
+        <polyline class="si-sparkline-line" points="@LinePoints" />
+    </svg>
+}
+else
+{
+    <div class="si-sparkline si-sparkline-empty"></div>
+}
+
+@code {
+    private const int Width = 100;
+    private const int Height = 28;
+
+    /// <summary>The series to plot, oldest first.</summary>
+    [Parameter]
+    public double[] Values { get; set; } = [];
+
+    /// <summary>
+    /// Upper bound of the y axis. Leave null to scale to the data; set it (to 100 for a
+    /// percentage) to keep the line comparable across renders instead of rescaling every tick.
+    /// </summary>
+    [Parameter]
+    public double? Max { get; set; }
+
+    private string LinePoints => BuildPoints(closed: false);
+
+    private string FillPoints => BuildPoints(closed: true);
+
+    private string BuildPoints(bool closed)
+    {
+        var max = Max ?? Values.Max();
+
+        // A flat-zero series would divide by zero; give it a nominal ceiling so it draws along
+        // the bottom instead of vanishing.
+        if (max <= 0)
+        {
+            max = 1;
+        }
+
+        var step = (double)Width / (Values.Length - 1);
+        var points = new List<string>(Values.Length + 2);
+
+        if (closed)
+        {
+            points.Add($"0,{Height}");
+        }
+
+        for (var i = 0; i < Values.Length; i++)
+        {
+            var x = i * step;
+            var y = Height - Math.Clamp(Values[i] / max, 0, 1) * Height;
+            points.Add(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{x:0.##},{y:0.##}"));
+        }
+
+        if (closed)
+        {
+            points.Add($"{Width},{Height}");
+        }
+
+        return string.Join(' ', points);
+    }
+}

@@ -1,0 +1,45 @@
+#!/bin/sh
+# Runs after the host package is unpacked and configured.
+set -e
+
+case "$1" in
+  configure)
+    # systemd must re-read the unit file before it can be enabled or restarted.
+    if [ -d /run/systemd/system ]; then
+      systemctl daemon-reload || true
+    fi
+
+    # 0700: the SQLite database holds the admin password hash and the data-protection key ring
+    # signs the auth cookie. Neither is any other local user's business.
+    mkdir -p /var/lib/easyhomeserver
+    chmod 0700 /var/lib/easyhomeserver
+
+    # deb-systemd-helper records the admin's enable/disable choice across upgrades, so a
+    # deliberately disabled service is not silently re-enabled by the next install.
+    if [ -x /usr/bin/deb-systemd-helper ]; then
+      deb-systemd-helper unmask easyhomeserver.service >/dev/null || true
+
+      if deb-systemd-helper --quiet was-enabled easyhomeserver.service; then
+        deb-systemd-helper enable easyhomeserver.service >/dev/null || true
+      else
+        deb-systemd-helper update-state easyhomeserver.service >/dev/null || true
+      fi
+    elif [ -d /run/systemd/system ]; then
+      systemctl enable easyhomeserver.service >/dev/null 2>&1 || true
+    fi
+
+    if [ -d /run/systemd/system ]; then
+      # restart, not start: on an upgrade the old binary is still running.
+      systemctl restart easyhomeserver.service || true
+    fi
+    ;;
+
+  abort-upgrade | abort-remove | abort-deconfigure) ;;
+
+  *)
+    echo "postinst called with unknown argument '$1'" >&2
+    exit 1
+    ;;
+esac
+
+exit 0
