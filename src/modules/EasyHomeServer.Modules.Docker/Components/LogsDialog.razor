@@ -1,0 +1,74 @@
+@inject DockerCli Cli
+@inject DockerOptions Options
+
+@* Shows the tail of a container's log. A one-shot read, not a follow: streaming would need a
+   long-lived process behind ISystemRunner, which is exactly what that seam does not do yet. *@
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center">
+            <MudIcon Icon="@Icons.Material.Filled.Article" Class="mr-2" />
+            <MudText Typo="Typo.h6">@ContainerName</MudText>
+            <MudSpacer />
+            <MudTooltip Text="Refresh">
+                <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                               Size="Size.Small"
+                               Disabled="_loading"
+                               OnClick="LoadAsync" />
+            </MudTooltip>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_loading)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="my-2" />
+        }
+
+        <pre class="dk-logs">@_logs</pre>
+
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">
+            Last @Options.LogTailLines lines. Timestamps are the daemon's, in UTC.
+        </MudText>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Close())">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance Dialog { get; set; } = default!;
+
+    /// <summary>Container to read logs from.</summary>
+    [Parameter]
+    public string ContainerId { get; set; } = string.Empty;
+
+    /// <summary>Name shown in the title.</summary>
+    [Parameter]
+    public string ContainerName { get; set; } = string.Empty;
+
+    private string _logs = string.Empty;
+    private bool _loading = true;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+
+        try
+        {
+            _logs = await Cli.GetLogsAsync(ContainerId, Options.LogTailLines);
+        }
+        catch (Exception ex)
+        {
+            _logs = $"Could not read logs: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+}

@@ -1,0 +1,92 @@
+/*
+ * Served from inside the module assembly at /_content/EasyHomeServer.Modules.Docker/docker.css.
+ * Embedded as a resource; see the module .csproj and PluginStaticFileProvider in the host.
+ */
+
+/* MudTabs has no parameter for padding its panel body, so the gap between the tab strip and
+   the table is set here rather than per panel. */
+.dk-tabs .mud-tabs-panels {
+    padding-top: 1.5rem;
+}
+
+.dk-table {
+    overflow-x: auto;
+}
+
+.dk-mono {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.8rem;
+}
+
+.dk-numeric {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.dk-actions {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.dk-chip {
+    height: 20px;
+}
+
+/* Mount points are long and would otherwise stretch the table past the viewport. */
+.dk-path {
+    max-width: 22rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dk-ports {
+    line-height: 1.9;
+}
+
+.dk-port {
+    display: inline-block;
+    margin-right: 0.4rem;
+    padding: 0.1rem 0.45rem;
+    border: 1px solid var(--mud-palette-divider);
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+    white-space: nowrap;
+    text-decoration: none;
+    color: var(--mud-palette-primary);
+}
+
+.dk-port:hover {
+    border-color: var(--mud-palette-primary);
+    background: var(--mud-palette-action-default-hover);
+}
+
+/* A port bound to loopback is not reachable from the browser, so it is not a link. */
+.dk-port-plain {
+    color: var(--mud-palette-text-secondary);
+}
+
+.dk-port-plain:hover {
+    border-color: var(--mud-palette-divider);
+    background: none;
+}
+
+.dk-logs {
+    max-height: 60vh;
+    margin: 0 0 0.75rem;
+    padding: 1rem;
+    overflow: auto;
+    border-radius: 6px;
+    background: var(--mud-palette-background-gray);
+    color: var(--mud-palette-text-primary);
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+    line-height: 1.5;
+
+    /* Log lines are long; wrap rather than scroll horizontally, but keep runs of spaces
+       that align stack traces and tables. */
+    white-space: pre-wrap;
+    word-break: break-word;
+}

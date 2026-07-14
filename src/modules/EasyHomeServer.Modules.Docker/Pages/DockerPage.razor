@@ -1,0 +1,576 @@
+@page "/docker"
+@attribute [Authorize]
+@implements IDisposable
+
+@inject IEventBus EventBus
+@inject DockerPoller Poller
+@inject DockerCli Cli
+@inject DockerOptions Options
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+
+<link rel="stylesheet" href="_content/EasyHomeServer.Modules.Docker/docker.css" />
+
+<PageTitle>Docker</PageTitle>
+
+<div class="d-flex align-center justify-space-between mb-6">
+    <div>
+        <MudText Typo="Typo.h4">Docker</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            @if (Poller.Availability is { IsAvailable: true, Version: { } version })
+            {
+                @($"Engine {version}")
+
+                @if (_snapshot is not null)
+                {
+                    @($" · {_snapshot.RunningCount} of {_snapshot.Containers.Length} containers running · {Format.Bytes(_snapshot.ImageBytes)} of images")
+                }
+            }
+            else
+            {
+                @("Not connected")
+            }
+        </MudText>
+    </div>
+</div>
+
+@if (!Poller.Availability.IsAvailable)
+{
+    @* Distinguishes "not installed" from "not running": the fix differs, so the page says which. *@
+    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined">
+        <MudText Typo="Typo.subtitle2">Docker is unavailable</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mt-1">@Poller.Availability.Reason</MudText>
+    </MudAlert>
+}
+else if (_snapshot is null)
+{
+    <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="my-4" />
+    <MudText Typo="Typo.body2" Class="mud-text-secondary">Reading the daemon…</MudText>
+}
+else
+{
+    <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" Class="dk-tabs">
+
+        <MudTabPanel Text="@($"Containers ({_snapshot.Containers.Length})")" Icon="@Icons.Material.Filled.ViewInAr">
+            @if (_snapshot.Containers.Length == 0)
+            {
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">No containers.</MudText>
+            }
+            else
+            {
+                <MudSimpleTable Dense="true" Hover="true" Elevation="0" Class="dk-table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Image</th>
+                            <th>State</th>
+                            <th>Ports</th>
+                            <th>Uptime</th>
+                            <th class="dk-actions">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var container in OrderedContainers)
+                        {
+                            <tr>
+                                <td>
+                                    <div class="d-flex align-center">
+                                        <b>@container.Name</b>
+                                        @if (container.ComposeProject is { } project)
+                                        {
+                                            <MudTooltip Text="@($"Part of the '{project}' compose project")">
+                                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                                         Color="Color.Default" Class="ml-2 dk-chip">@project</MudChip>
+                                            </MudTooltip>
+                                        }
+                                    </div>
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary dk-mono">@container.ShortId</MudText>
+                                </td>
+                                <td class="mud-text-secondary">@container.Image</td>
+                                <td>
+                                    <MudChip T="string" Size="Size.Small" Color="@StateColor(container)" Variant="Variant.Filled">
+                                        @StateLabel(container)
+                                    </MudChip>
+                                </td>
+                                <td class="dk-ports">
+                                    @if (container.Ports.Length == 0)
+                                    {
+                                        <span class="mud-text-secondary">—</span>
+                                    }
+                                    else
+                                    {
+                                        @foreach (var port in container.Ports)
+                                        {
+                                            @* Only linked when reachable: a port bound to 127.0.0.1 on the
+                                               server is not reachable from the browser's machine. *@
+                                            @if (container.IsRunning && IsLinkable(port))
+                                            {
+                                                <a class="dk-port" href="@PortUrl(port)" target="_blank" rel="noopener">
+                                                    @port.HostPort<span class="mud-text-secondary">:@port.ContainerPort</span>
+                                                </a>
+                                            }
+                                            else
+                                            {
+                                                <span class="dk-port dk-port-plain">
+                                                    @port.HostPort<span class="mud-text-secondary">:@port.ContainerPort</span>
+                                                </span>
+                                            }
+                                        }
+                                    }
+                                </td>
+                                <td class="dk-numeric">
+                                    @(container.Uptime is { } uptime ? Format.Duration(uptime) : "—")
+                                </td>
+                                <td class="dk-actions">
+                                    <MudTooltip Text="Logs">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Article" Size="Size.Small"
+                                                       OnClick="@(() => ShowLogs(container))" />
+                                    </MudTooltip>
+
+                                    @if (Options.AllowContainerControl)
+                                    {
+                                        @if (container.IsRunning)
+                                        {
+                                            <MudTooltip Text="Restart">
+                                                <MudIconButton Icon="@Icons.Material.Filled.RestartAlt" Size="Size.Small"
+                                                               Disabled="@IsBusy(container)"
+                                                               OnClick="@(() => Run(container, "Restarted", () => Cli.RestartAsync(container.Id, 10)))" />
+                                            </MudTooltip>
+                                            <MudTooltip Text="Stop">
+                                                <MudIconButton Icon="@Icons.Material.Filled.Stop" Size="Size.Small" Color="Color.Warning"
+                                                               Disabled="@IsBusy(container)"
+                                                               OnClick="@(() => Run(container, "Stopped", () => Cli.StopAsync(container.Id, 10)))" />
+                                            </MudTooltip>
+                                        }
+                                        else
+                                        {
+                                            <MudTooltip Text="Start">
+                                                <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small" Color="Color.Success"
+                                                               Disabled="@IsBusy(container)"
+                                                               OnClick="@(() => Run(container, "Started", () => Cli.StartAsync(container.Id)))" />
+                                            </MudTooltip>
+                                        }
+
+                                        <MudTooltip Text="Remove">
+                                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                                           Disabled="@IsBusy(container)"
+                                                           OnClick="@(() => RemoveContainer(container))" />
+                                        </MudTooltip>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+            }
+        </MudTabPanel>
+
+        <MudTabPanel Text="@($"Images ({_snapshot.Images.Length})")" Icon="@Icons.Material.Filled.Layers">
+            <div class="d-flex justify-end mb-3">
+                @if (Options.AllowContainerControl && _snapshot.Images.Any(i => i.IsDangling))
+                {
+                    <MudButton StartIcon="@Icons.Material.Filled.CleaningServices" Variant="Variant.Outlined"
+                               Size="Size.Small" OnClick="PruneImages">
+                        Prune @(_snapshot.Images.Count(i => i.IsDangling)) dangling
+                    </MudButton>
+                }
+            </div>
+
+            <MudSimpleTable Dense="true" Hover="true" Elevation="0" Class="dk-table">
+                <thead>
+                    <tr>
+                        <th>Image</th>
+                        <th>Id</th>
+                        <th class="dk-numeric">Size</th>
+                        <th>Created</th>
+                        <th>Used by</th>
+                        <th class="dk-actions">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var image in _snapshot.Images.OrderByDescending(i => i.SizeBytes))
+                    {
+                        <tr>
+                            <td>
+                                <b class="@(image.IsDangling ? "mud-text-secondary" : "")">@image.DisplayName</b>
+                                @if (image.Tags.Length > 1)
+                                {
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">
+                                        +@(image.Tags.Length - 1) more tag@(image.Tags.Length == 2 ? "" : "s")
+                                    </MudText>
+                                }
+                            </td>
+                            <td class="mud-text-secondary dk-mono">@image.ShortId</td>
+                            <td class="dk-numeric">@Format.Bytes(image.SizeBytes)</td>
+                            <td class="mud-text-secondary">@Format.Ago(image.CreatedAt)</td>
+                            <td>
+                                @if (image.UsedByContainers > 0)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info" Class="dk-chip">
+                                        @image.UsedByContainers container@(image.UsedByContainers == 1 ? "" : "s")
+                                    </MudChip>
+                                }
+                                else
+                                {
+                                    <span class="mud-text-secondary">—</span>
+                                }
+                            </td>
+                            <td class="dk-actions">
+                                @if (Options.AllowContainerControl)
+                                {
+                                    <MudTooltip Text="@(image.UsedByContainers > 0 ? "In use by a container" : "Remove")">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                                       Disabled="@(image.UsedByContainers > 0)"
+                                                       OnClick="@(() => RemoveImage(image))" />
+                                    </MudTooltip>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </MudTabPanel>
+
+        <MudTabPanel Text="@($"Volumes ({_snapshot.Volumes.Length})")" Icon="@Icons.Material.Filled.Storage">
+            @if (_snapshot.Volumes.Length == 0)
+            {
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">No volumes.</MudText>
+            }
+            else
+            {
+                <MudSimpleTable Dense="true" Hover="true" Elevation="0" Class="dk-table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Driver</th>
+                            <th>Mount point</th>
+                            <th>Used by</th>
+                            <th class="dk-actions">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var volume in _snapshot.Volumes.OrderBy(v => v.Name, StringComparer.Ordinal))
+                        {
+                            <tr>
+                                <td><b>@volume.Name</b></td>
+                                <td class="mud-text-secondary">@volume.Driver</td>
+                                <td class="mud-text-secondary dk-mono dk-path">@volume.MountPoint</td>
+                                <td>
+                                    @if (volume.IsOrphaned)
+                                    {
+                                        <MudTooltip Text="No container mounts this volume">
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                                     Color="Color.Warning" Class="dk-chip">orphaned</MudChip>
+                                        </MudTooltip>
+                                    }
+                                    else
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info" Class="dk-chip">
+                                            @volume.UsedByContainers container@(volume.UsedByContainers == 1 ? "" : "s")
+                                        </MudChip>
+                                    }
+                                </td>
+                                <td class="dk-actions">
+                                    @if (Options.AllowContainerControl)
+                                    {
+                                        <MudTooltip Text="@(volume.IsOrphaned ? "Remove" : "In use by a container")">
+                                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                                           Disabled="@(!volume.IsOrphaned)"
+                                                           OnClick="@(() => RemoveVolume(volume))" />
+                                        </MudTooltip>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+            }
+        </MudTabPanel>
+
+        <MudTabPanel Text="@($"Networks ({_snapshot.Networks.Length})")" Icon="@Icons.Material.Filled.Hub">
+            <MudSimpleTable Dense="true" Hover="true" Elevation="0" Class="dk-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Driver</th>
+                        <th>Scope</th>
+                        <th>Subnet</th>
+                        <th>Containers</th>
+                        <th class="dk-actions">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var network in _snapshot.Networks.OrderBy(n => n.Name, StringComparer.Ordinal))
+                    {
+                        <tr>
+                            <td><b>@network.Name</b></td>
+                            <td class="mud-text-secondary">@network.Driver</td>
+                            <td class="mud-text-secondary">@network.Scope</td>
+                            <td class="mud-text-secondary dk-mono">
+                                @(network.Subnets.Length > 0 ? string.Join(", ", network.Subnets) : "—")
+                            </td>
+                            <td class="dk-numeric">@network.UsedByContainers</td>
+                            <td class="dk-actions">
+                                @if (Options.AllowContainerControl)
+                                {
+                                    <MudTooltip Text="@(network.IsBuiltIn ? "Built-in network" : network.UsedByContainers > 0 ? "In use" : "Remove")">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                                       Disabled="@(network.IsBuiltIn || network.UsedByContainers > 0)"
+                                                       OnClick="@(() => RemoveNetwork(network))" />
+                                    </MudTooltip>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </MudTabPanel>
+
+    </MudTabs>
+
+    <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-4">
+        Polled every @Options.PollIntervalSeconds.ToString("0.#")s &middot; last update
+        @_snapshot.TimestampUtc.ToLocalTime().ToString("HH:mm:ss")
+    </MudText>
+}
+
+@code {
+    private IDisposable? _subscription;
+    private DockerSnapshot? _snapshot;
+
+    // Ids with an action in flight. A second click before the poller catches up would issue a
+    // duplicate command against a container that is already changing.
+    private readonly HashSet<string> _busy = [];
+
+    protected override void OnInitialized()
+    {
+        _snapshot = Poller.Latest;
+        _subscription = EventBus.Subscribe<DockerSnapshot>(OnSnapshot);
+    }
+
+    private Task OnSnapshot(DockerSnapshot snapshot, CancellationToken cancellationToken)
+    {
+        _snapshot = snapshot;
+
+        // Published from the poller's thread; InvokeAsync marshals onto the circuit.
+        return InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>
+    /// Running containers first, then by compose project, then by name — so the things that are
+    /// actually serving traffic are at the top rather than sorted among stopped leftovers.
+    /// </summary>
+    private IEnumerable<DockerContainer> OrderedContainers =>
+        _snapshot!.Containers
+            .OrderByDescending(c => c.IsRunning)
+            .ThenBy(c => c.ComposeProject ?? "￿", StringComparer.Ordinal)
+            .ThenBy(c => c.Name, StringComparer.Ordinal);
+
+    private bool IsBusy(DockerContainer container) => _busy.Contains(container.Id);
+
+    private static Color StateColor(DockerContainer container) => container.State switch
+    {
+        ContainerState.Running when container.Health == "unhealthy" => Color.Warning,
+        ContainerState.Running => Color.Success,
+        ContainerState.Restarting => Color.Warning,
+        ContainerState.Paused => Color.Info,
+        ContainerState.Exited when container.ExitCode is not (null or 0) => Color.Error,
+        ContainerState.Exited => Color.Default,
+        ContainerState.Dead => Color.Error,
+        _ => Color.Default,
+    };
+
+    private static string StateLabel(DockerContainer container) => container switch
+    {
+        // A non-zero exit is the single most useful thing to surface: "exited" alone hides
+        // whether the container finished its job or crashed.
+        { State: ContainerState.Exited, ExitCode: > 0 and var code } => $"exited ({code})",
+        { State: ContainerState.Running, Health: "unhealthy" } => "unhealthy",
+        { State: ContainerState.Running, Health: "starting" } => "starting",
+        _ => container.State.ToString().ToLowerInvariant(),
+    };
+
+    /// <summary>
+    /// Whether a published port can be opened from the browser. A port bound to loopback is
+    /// reachable only on the server itself, so linking it would give a dead link.
+    /// </summary>
+    private static bool IsLinkable(PortBinding port) =>
+        port.Protocol == "tcp" && port.HostIp is "0.0.0.0" or "::" or "";
+
+    /// <summary>
+    /// Link target for a published port, built from the host in the browser's own address bar.
+    /// The bind address is not usable here: 0.0.0.0 means "every interface", not a destination.
+    /// </summary>
+    private string PortUrl(PortBinding port)
+    {
+        var scheme = port.ContainerPort == 443 ? "https" : "http";
+        var host = Navigation.ToAbsoluteUri(Navigation.Uri).Host;
+
+        return $"{scheme}://{host}:{port.HostPort}";
+    }
+
+    /// <summary>
+    /// Runs an action against a container and reports it.
+    /// </summary>
+    /// <remarks>
+    /// The success message is composed here, from the name the operator actually clicked.
+    /// <see cref="DockerCli"/> only knows the id, and echoing a 64-character digest back at
+    /// someone who clicked "stop" next to the word "cache" is not a message.  Failures still
+    /// show Docker's own stderr, which says something the module could not.
+    /// </remarks>
+    private async Task Run(DockerContainer container, string pastTense, Func<Task<DockerActionResult>> action)
+    {
+        _busy.Add(container.Id);
+
+        try
+        {
+            var result = await action();
+
+            Snackbar.Add(
+                result.Succeeded ? $"{pastTense} {container.Name}." : result.Message,
+                result.Succeeded ? Severity.Success : Severity.Error);
+
+            // Refresh immediately rather than waiting up to a full poll interval for the row to
+            // catch up with what the operator just did.
+            await RefreshAsync();
+        }
+        finally
+        {
+            _busy.Remove(container.Id);
+        }
+    }
+
+    private async Task RefreshAsync()
+    {
+        var containers = await Cli.ListContainersAsync();
+
+        if (_snapshot is not null)
+        {
+            _snapshot = _snapshot with { Containers = containers, TimestampUtc = DateTimeOffset.UtcNow };
+            StateHasChanged();
+        }
+    }
+
+    private async Task ShowLogs(DockerContainer container)
+    {
+        var parameters = new DialogParameters<LogsDialog>
+        {
+            { x => x.ContainerId, container.Id },
+            { x => x.ContainerName, container.Name },
+        };
+
+        await DialogService.ShowAsync<LogsDialog>(
+            $"Logs: {container.Name}",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true });
+    }
+
+    private async Task RemoveContainer(DockerContainer container)
+    {
+        var running = container.IsRunning;
+
+        if (!await Confirm(
+            $"Remove container '{container.Name}'?",
+            running
+                ? "It is running and will be killed first. Anything not on a volume is lost."
+                : "Anything written inside the container that is not on a volume is lost.",
+            "Remove"))
+        {
+            return;
+        }
+
+        _busy.Add(container.Id);
+
+        try
+        {
+            var result = await Cli.RemoveContainerAsync(container.Id, force: running);
+
+            Snackbar.Add(
+                result.Succeeded ? $"Removed {container.Name}." : result.Message,
+                result.Succeeded ? Severity.Success : Severity.Error);
+
+            await RefreshAsync();
+        }
+        finally
+        {
+            _busy.Remove(container.Id);
+        }
+    }
+
+    private async Task RemoveImage(DockerImage image)
+    {
+        if (!await Confirm(
+            $"Remove image '{image.DisplayName}'?",
+            "Any container created from it later will have to pull it again.",
+            "Remove"))
+        {
+            return;
+        }
+
+        var result = await Cli.RemoveImageAsync(image.Id);
+        Snackbar.Add(result.Message, result.Succeeded ? Severity.Success : Severity.Error);
+    }
+
+    private async Task RemoveVolume(DockerVolume volume)
+    {
+        if (!await Confirm(
+            $"Remove volume '{volume.Name}'?",
+            "The data in this volume is deleted permanently and is not recoverable from here.",
+            "Remove"))
+        {
+            return;
+        }
+
+        var result = await Cli.RemoveVolumeAsync(volume.Name);
+        Snackbar.Add(result.Message, result.Succeeded ? Severity.Success : Severity.Error);
+    }
+
+    private async Task RemoveNetwork(DockerNetwork network)
+    {
+        if (!await Confirm($"Remove network '{network.Name}'?", null, "Remove"))
+        {
+            return;
+        }
+
+        var result = await Cli.RemoveNetworkAsync(network.Id);
+        Snackbar.Add(result.Message, result.Succeeded ? Severity.Success : Severity.Error);
+    }
+
+    private async Task PruneImages()
+    {
+        var count = _snapshot?.Images.Count(i => i.IsDangling) ?? 0;
+
+        if (!await Confirm(
+            $"Remove {count} dangling image{(count == 1 ? "" : "s")}?",
+            "Dangling images are untagged leftovers of a rebuild. Nothing running depends on them.",
+            "Prune"))
+        {
+            return;
+        }
+
+        var result = await Cli.PruneImagesAsync();
+        Snackbar.Add(result.Message, result.Succeeded ? Severity.Success : Severity.Error);
+    }
+
+    private async Task<bool> Confirm(string message, string? detail, string confirmText)
+    {
+        var parameters = new DialogParameters<ConfirmDialog>
+        {
+            { x => x.Message, message },
+            { x => x.Detail, detail },
+            { x => x.ConfirmText, confirmText },
+        };
+
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>(confirmText, parameters);
+        var result = await dialog.Result;
+
+        return result is { Canceled: false };
+    }
+
+    public void Dispose()
+    {
+        // Without this the bus holds this component for the life of the process.
+        _subscription?.Dispose();
+    }
+}
