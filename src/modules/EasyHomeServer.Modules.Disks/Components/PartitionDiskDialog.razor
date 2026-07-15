@@ -1,0 +1,312 @@
+@inject DiskFormatter Formatter
+
+@*
+    Lays out a disk's partitions. The table is rewritten from empty, so this destroys the disk —
+    it is not an editor that moves data about. The commands are shown because they are the truth
+    of what happens, and because someone who would rather run them by hand should be able to.
+*@
+
+<MudDialog>
+    <DialogContent>
+        <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-4">
+            Everything on @Device.Name (@Format.Bytes(Device.SizeBytes)) is destroyed. The whole
+            partition table is rewritten; existing partitions are not kept.
+        </MudAlert>
+
+        <MudSimpleTable Dense="true" Elevation="0" Class="dsk-table mb-2">
+            <thead>
+            <tr>
+                <th style="width: 3rem;">#</th>
+                <th style="width: 30%;">Size</th>
+                <th>Filesystem</th>
+                <th>Label</th>
+                <th style="width: 3rem;"></th>
+            </tr>
+            </thead>
+            <tbody>
+            @foreach (var (row, index) in _rows.Select((r, i) => (r, i)))
+            {
+                <tr>
+                    <td class="dsk-mono">@(index + 1)</td>
+                    <td>
+                        @if (row.TakesRemainder)
+                        {
+                            <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                                rest — @Format.Bytes(RemainderBytes)
+                            </MudText>
+                        }
+                        else
+                        {
+                            <div class="d-flex align-center">
+                                <MudNumericField T="double" Value="row.Size"
+                                                 ValueChanged="@(value => SetSize(row, value))"
+                                                 Min="0" Immediate="true" Margin="Margin.Dense"
+                                                 Variant="Variant.Outlined" Class="mr-2" />
+                                <MudSelect T="string" Value="row.Unit"
+                                           ValueChanged="@(value => SetUnit(row, value))"
+                                           Margin="Margin.Dense" Variant="Variant.Outlined"
+                                           Style="width: 5.5rem;">
+                                    <MudSelectItem T="string" Value="@("MB")">MB</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@("GB")">GB</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@("TB")">TB</MudSelectItem>
+                                </MudSelect>
+                            </div>
+                        }
+                    </td>
+                    <td>
+                        <MudSelect T="string" Value="row.FileSystemId"
+                                   ValueChanged="@(value => SetFileSystem(row, value))"
+                                   Margin="Margin.Dense" Variant="Variant.Outlined">
+                            @foreach (var choice in DiskFormatter.FileSystems)
+                            {
+                                <MudSelectItem T="string" Value="@choice.Id">@choice.Name</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </td>
+                    <td>
+                        <MudTextField T="string" Value="row.Label"
+                                      ValueChanged="@(value => SetLabel(row, value))"
+                                      Margin="Margin.Dense" Variant="Variant.Outlined"
+                                      Immediate="true" Placeholder="optional" />
+                    </td>
+                    <td>
+                        <MudTooltip Text="Remove this partition">
+                            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                           aria-label="@($"Remove partition {index + 1}")"
+                                           Disabled="@(_rows.Count == 1 || _busy)"
+                                           OnClick="@(() => Remove(row))" />
+                        </MudTooltip>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </MudSimpleTable>
+
+        <div class="d-flex align-center justify-space-between mb-3">
+            <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Add"
+                       Disabled="_busy" OnClick="Add">
+                Add partition
+            </MudButton>
+
+            <MudText Typo="Typo.caption" Class="@(Unallocated < 0 ? "mud-error-text" : "mud-text-secondary")">
+                @if (_rows.Any(r => r.TakesRemainder))
+                {
+                    @($"{Format.Bytes(RemainderBytes)} left for the last partition")
+                }
+                else
+                {
+                    @($"{Format.Bytes(Math.Max(0, Unallocated))} of {Format.Bytes(Device.SizeBytes)} unallocated")
+                }
+            </MudText>
+        </div>
+
+        <MudCheckBox T="bool" Value="_lastTakesRest" ValueChanged="SetLastTakesRest"
+                     Dense="true" Color="Color.Primary" Class="mb-3">
+            Give the last partition whatever space is left
+        </MudCheckBox>
+
+        @if (_problems.Length > 0)
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">
+                @foreach (var problem in _problems)
+                {
+                    <MudText Typo="Typo.body2">@problem</MudText>
+                }
+            </MudAlert>
+        }
+        else
+        {
+            @* The same list that will execute, not a description of it. *@
+            <MudExpansionPanels Elevation="0" Class="mb-3">
+                <MudExpansionPanel Text="@($"Will run {Commands.Length} commands")">
+                    @foreach (var command in Commands)
+                    {
+                        <MudText Typo="Typo.caption" Class="dsk-mono d-block">@command.ToString()</MudText>
+                    }
+                </MudExpansionPanel>
+            </MudExpansionPanels>
+        }
+
+        <MudTextField @bind-Value="_confirmation"
+                      Label="@($"Type {Device.Name} to confirm")"
+                      Variant="Variant.Outlined"
+                      Immediate="true"
+                      Error="@(_confirmation.Length > 0 && !IsConfirmed)"
+                      HelperText="@($"This destroys every existing partition on {Device.Name}.")" />
+
+        @if (_error is { Length: > 0 })
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mt-3">@_error</MudAlert>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cancel" Disabled="_busy">Cancel</MudButton>
+        <MudButton Color="Color.Error" Variant="Variant.Filled"
+                   Disabled="@(_busy || !IsConfirmed || _problems.Length > 0)"
+                   OnClick="ApplyAsync">
+            @(_busy ? "Partitioning…" : "Partition disk")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    /// <summary>One row of the form. Size is kept as a number and a unit, as it was typed.</summary>
+    private sealed class Row
+    {
+        public double Size { get; set; } = 1;
+
+        public string Unit { get; set; } = "GB";
+
+        public string FileSystemId { get; set; } = "ext4";
+
+        public string? Label { get; set; }
+
+        public bool TakesRemainder { get; set; }
+
+        /// <summary>The size in bytes, or null when this row takes the remainder.</summary>
+        public long? SizeBytes => TakesRemainder ? null : (long)(Size * UnitMultiplier(Unit));
+
+        private static double UnitMultiplier(string unit) => unit switch
+        {
+            "MB" => 1024d * 1024,
+            "TB" => 1024d * 1024 * 1024 * 1024,
+            _ => 1024d * 1024 * 1024,
+        };
+    }
+
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>The disk to lay out.</summary>
+    [Parameter]
+    [EditorRequired]
+    public required BlockDevice Device { get; set; }
+
+    private readonly List<Row> _rows = [];
+    private bool _lastTakesRest = true;
+    private string _confirmation = string.Empty;
+    private bool _busy;
+    private string? _error;
+
+    protected override void OnInitialized() =>
+        _rows.Add(new Row { TakesRemainder = true, FileSystemId = "ext4" });
+
+    private bool IsConfirmed => string.Equals(_confirmation.Trim(), Device.Name, StringComparison.Ordinal);
+
+    private PartitionPlan Plan => new()
+    {
+        Partitions =
+        [
+            .. _rows.Select(row => new PartitionSpec
+            {
+                SizeBytes = row.SizeBytes,
+                FileSystemId = row.FileSystemId,
+                Label = string.IsNullOrWhiteSpace(row.Label) ? null : row.Label.Trim(),
+            }),
+        ],
+    };
+
+    private ImmutableArray<string> _problems => Plan.Validate(Device.SizeBytes);
+
+    private ImmutableArray<PlannedCommand> Commands => DiskFormatter.PlanCommands(Device, Plan);
+
+    private long RemainderBytes => Plan.RemainderBytes(Device.SizeBytes);
+
+    private long Unallocated => Device.SizeBytes - PartitionPlan.GptOverheadBytes - Plan.RequestedBytes;
+
+    /// <summary>
+    /// Adds a partition, keeping the "last one takes the rest" arrangement intact.
+    /// </summary>
+    /// <remarks>
+    /// The new row is appended, so whichever row was greedy has to stop being greedy and take a
+    /// concrete size — otherwise the plan is invalid the moment it appears, which reads as a bug
+    /// rather than a choice.
+    /// </remarks>
+    private void Add()
+    {
+        foreach (var row in _rows)
+        {
+            if (row.TakesRemainder)
+            {
+                row.TakesRemainder = false;
+                row.Size = 1;
+                row.Unit = "GB";
+            }
+        }
+
+        _rows.Add(new Row { TakesRemainder = _lastTakesRest, FileSystemId = "ext4" });
+
+        ApplyRemainderRule();
+    }
+
+    private void Remove(Row row)
+    {
+        _rows.Remove(row);
+
+        ApplyRemainderRule();
+    }
+
+    private void SetSize(Row row, double value)
+    {
+        row.Size = value;
+        row.TakesRemainder = false;
+    }
+
+    private void SetUnit(Row row, string value) => row.Unit = value;
+
+    private void SetFileSystem(Row row, string value) => row.FileSystemId = value;
+
+    private void SetLabel(Row row, string value) => row.Label = value;
+
+    private void SetLastTakesRest(bool value)
+    {
+        _lastTakesRest = value;
+
+        ApplyRemainderRule();
+    }
+
+    /// <summary>Only the last row may be greedy, because sgdisk fills from the first free sector.</summary>
+    private void ApplyRemainderRule()
+    {
+        for (var i = 0; i < _rows.Count; i++)
+        {
+            var isLast = i == _rows.Count - 1;
+
+            // A row that stops being greedy needs a real size, or the plan says "0 bytes".
+            if (_rows[i].TakesRemainder && !(_lastTakesRest && isLast))
+            {
+                _rows[i].Size = 1;
+                _rows[i].Unit = "GB";
+            }
+
+            _rows[i].TakesRemainder = _lastTakesRest && isLast;
+        }
+    }
+
+    private async Task ApplyAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await Formatter.PartitionAsync(Device, Plan, _confirmation.Trim());
+
+            if (!result.Succeeded)
+            {
+                _error = result.Message;
+
+                return;
+            }
+
+            MudDialog.Close(DialogResult.Ok(result.Message));
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

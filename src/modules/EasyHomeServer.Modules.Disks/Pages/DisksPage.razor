@@ -110,11 +110,20 @@ else
                     {
                         var refusal = DiskFormatter.DescribeRefusal(disk);
 
-                        <MudTooltip Text="@(refusal ?? "Erase and prepare this disk")">
+                        <MudTooltip Text="@(refusal ?? "Erase and prepare this disk as one partition")">
                             <MudIconButton Icon="@Icons.Material.Filled.FormatPaint" Size="Size.Small" Color="Color.Error"
                                            aria-label="@($"Prepare {disk.Name}")"
                                            Disabled="@(refusal is not null || _busy)"
                                            OnClick="@(() => PrepareDisk(disk))" />
+                        </MudTooltip>
+
+                        @* Separate from Prepare rather than a mode inside it: taking a new disk and
+                           wanting all of it is the common case and should stay one click. *@
+                        <MudTooltip Text="@(refusal ?? "Erase and lay out several partitions")">
+                            <MudIconButton Icon="@Icons.Material.Filled.GridView" Size="Size.Small" Color="Color.Error"
+                                           aria-label="@($"Partition {disk.Name}")"
+                                           Disabled="@(refusal is not null || _busy)"
+                                           OnClick="@(() => PartitionDisk(disk))" />
                         </MudTooltip>
                     }
                 </div>
@@ -397,6 +406,23 @@ else
             new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
 
         return await dialog.Result is { Canceled: false };
+    }
+
+    private async Task PartitionDisk(BlockDevice disk)
+    {
+        var parameters = new DialogParameters<PartitionDiskDialog> { { x => x.Device, disk } };
+
+        var dialog = await DialogService.ShowAsync<PartitionDiskDialog>(
+            $"Partition {disk.Name}",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+        if (await dialog.Result is { Canceled: false, Data: string message })
+        {
+            Snackbar.Add(message, Severity.Success);
+
+            await RefreshAsync();
+        }
     }
 
     private async Task PrepareDisk(BlockDevice disk)

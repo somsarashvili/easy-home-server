@@ -129,6 +129,210 @@ public sealed class DiskFormatter(ISystemRunner systemRunner, ILogger<DiskFormat
     }
 
     /// <summary>
+    /// The exact commands a plan would run, in order.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Built once and used for both the preview and the run, so the list shown to someone before
+    /// they type a device name is the list that executes. A preview assembled separately is a
+    /// second implementation of the same logic, and the day the two drift is the day someone
+    /// approves one thing and gets another.
+    /// </para>
+    /// <para>
+    /// mkfs is included per partition even though the kernel has not been told about those
+    /// partitions yet at preview time — the paths are computed, not probed.
+    /// </para>
+    /// </remarks>
+    public static ImmutableArray<PlannedCommand> PlanCommands(BlockDevice device, PartitionPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        ArgumentNullException.ThrowIfNull(plan);
+
+        var commands = ImmutableArray.CreateBuilder<PlannedCommand>();
+
+        // Old signatures left in place confuse blkid, which then reports a filesystem that is not
+        // there any more.
+        commands.Add(new PlannedCommand
+        {
+            Description = "clearing old signatures",
+            File = "wipefs",
+            Arguments = ["--all", "--force", device.Path],
+        });
+
+        // GPT unconditionally: MBR cannot address past 2 TB, and a disk in a home server today is
+        // usually larger than that.
+        commands.Add(new PlannedCommand
+        {
+            Description = "writing a GPT partition table",
+            File = "sgdisk",
+            Arguments = ["--zap-all", device.Path],
+        });
+
+        foreach (var (partition, index) in plan.Partitions.Select((p, i) => (p, i)))
+        {
+            var number = index + 1;
+
+            commands.Add(new PlannedCommand
+            {
+                Description = $"creating partition {number}",
+                File = "sgdisk",
+                Arguments =
+                [
+                    // Start 0: the first aligned free sector, so partitions pack in order.
+                    $"--new={number}:0:{PartitionPlan.SizeArgument(partition)}",
+                    $"--typecode={number}:8300",
+                    device.Path,
+                ],
+            });
+        }
+
+        foreach (var (partition, index) in plan.Partitions.Select((p, i) => (p, i)))
+        {
+            var number = index + 1;
+
+            if (FileSystems.FirstOrDefault(f => f.Id == partition.FileSystemId) is not { } fileSystem)
+            {
+                continue;
+            }
+
+            commands.Add(new PlannedCommand
+            {
+                Description = $"making {fileSystem.Name} on partition {number}",
+                File = fileSystem.MakeCommand,
+                Arguments = [.. MakeArguments(fileSystem, partition.Label, PartitionPath(device.Path, number))],
+            });
+        }
+
+        return commands.ToImmutable();
+    }
+
+    /// <summary>Applies a whole partition layout, destroying everything on the disk.</summary>
+    /// <remarks>
+    /// The table is rewritten from empty rather than edited. Editing in place means moving data and
+    /// shrinking filesystems, which is a different and much more dangerous program.
+    /// </remarks>
+    public async Task<FormatResult> PartitionAsync(
+        BlockDevice device,
+        PartitionPlan plan,
+        string confirmedDeviceName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        ArgumentNullException.ThrowIfNull(plan);
+
+        if (DescribeRefusal(device) is { } refusal)
+        {
+            return new FormatResult { Succeeded = false, Message = $"Refusing to partition {device.Name}: {refusal}" };
+        }
+
+        if (!string.Equals(confirmedDeviceName, device.Name, StringComparison.Ordinal))
+        {
+            return new FormatResult { Succeeded = false, Message = "The typed device name does not match." };
+        }
+
+        if (plan.Validate(device.SizeBytes) is { Length: > 0 } problems)
+        {
+            return new FormatResult { Succeeded = false, Message = problems[0] };
+        }
+
+        // Each partition must name a filesystem this knows. Checked per partition rather than by
+        // counting a de-duplicated list: three ext4 partitions collapse to one entry, and comparing
+        // that count to the partition count calls every uniform plan invalid.
+        if (plan.Partitions.FirstOrDefault(p => FileSystems.All(f => f.Id != p.FileSystemId)) is { } unknown)
+        {
+            return new FormatResult
+            {
+                Succeeded = false,
+                Message = $"'{unknown.FileSystemId}' is not a filesystem this can make.",
+            };
+        }
+
+        var fileSystems = plan.Partitions
+            .Select(p => FileSystems.First(f => f.Id == p.FileSystemId))
+            .Distinct()
+            .ToList();
+
+        // Every tool for every filesystem in the plan, before touching anything — the same reason
+        // as PrepareAsync, multiplied: a plan mixing ext4 and XFS can be half-formattable, and
+        // finding that out after the table is written leaves a disk of unusable partitions.
+        if (await FindMissingToolsAsync(fileSystems, cancellationToken).ConfigureAwait(false) is { Count: > 0 } missing)
+        {
+            var packages = string.Join(" ", missing.Select(PackageForTool).Distinct());
+
+            return new FormatResult
+            {
+                Succeeded = false,
+                Message = $"Nothing has been changed. {string.Join(", ", missing)} "
+                          + $"{(missing.Count == 1 ? "is" : "are")} not installed. Install with: apt install {packages}",
+            };
+        }
+
+        logger.LogWarning(
+            "Partitioning {Device} ({Size} bytes) into {Count} partitions. Everything on it is being destroyed.",
+            device.Path,
+            device.SizeBytes,
+            plan.Partitions.Length);
+
+        var commands = PlanCommands(device, plan);
+
+        // The partition table has to exist before mkfs can be pointed at it, and the kernel learns
+        // about it asynchronously.
+        var settled = false;
+
+        foreach (var command in commands)
+        {
+            if (!settled && command.IsMakeFileSystem)
+            {
+                await SettleAsync(cancellationToken).ConfigureAwait(false);
+                settled = true;
+            }
+
+            var failure = await RunAsync(command.File, command.Arguments, command.Description, device, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (failure is not null)
+            {
+                return failure;
+            }
+        }
+
+        await SettleAsync(cancellationToken).ConfigureAwait(false);
+
+        logger.LogInformation("Partitioned {Device} into {Count} partitions.", device.Path, plan.Partitions.Length);
+
+        return new FormatResult
+        {
+            Succeeded = true,
+            Message = $"{device.Name} now has {plan.Partitions.Length} "
+                      + $"partition{(plan.Partitions.Length == 1 ? "" : "s")}. Mount them to use them.",
+            PartitionPath = PartitionPath(device.Path, 1),
+        };
+    }
+
+    /// <summary>The arguments mkfs needs for a filesystem, label and target.</summary>
+    private static IEnumerable<string> MakeArguments(FileSystemChoice fileSystem, string? label, string target)
+    {
+        if (label is { Length: > 0 })
+        {
+            yield return "-L";
+            yield return label;
+        }
+
+        // Non-interactive: mkfs asks for confirmation on a device that looks used, and there is no
+        // one to answer.
+        if (fileSystem.Id is "ext4")
+        {
+            yield return "-F";
+        }
+        else if (fileSystem.Id is "btrfs" or "xfs")
+        {
+            yield return "-f";
+        }
+
+        yield return target;
+    }
+
+    /// <summary>
     /// Wipes a disk, gives it a GPT with one full-size partition, and makes a filesystem on it.
     /// </summary>
     /// <remarks>
@@ -257,7 +461,7 @@ public sealed class DiskFormatter(ISystemRunner systemRunner, ILogger<DiskFormat
 
     private async Task<FormatResult?> RunAsync(
         string file,
-        string[] arguments,
+        IReadOnlyList<string> arguments,
         string description,
         BlockDevice device,
         CancellationToken cancellationToken,
@@ -322,11 +526,24 @@ public sealed class DiskFormatter(ISystemRunner systemRunner, ILogger<DiskFormat
     /// Returns the tools needed for this format that are not installed, in the order they would
     /// have been used.
     /// </summary>
-    private async Task<List<string>> FindMissingToolsAsync(
+    private Task<List<string>> FindMissingToolsAsync(
         FileSystemChoice fileSystem,
+        CancellationToken cancellationToken) =>
+        FindMissingToolsAsync([fileSystem], cancellationToken);
+
+    /// <summary>
+    /// Returns the tools needed for these filesystems that are not installed, in the order they
+    /// would have been used.
+    /// </summary>
+    private async Task<List<string>> FindMissingToolsAsync(
+        IEnumerable<FileSystemChoice> fileSystems,
         CancellationToken cancellationToken)
     {
-        var required = new[] { "wipefs", "sgdisk", fileSystem.MakeCommand };
+        var required = new[] { "wipefs", "sgdisk" }
+            .Concat(fileSystems.Select(f => f.MakeCommand))
+            .Distinct()
+            .ToArray();
+
         var missing = new List<string>();
 
         foreach (var tool in required)
@@ -364,6 +581,31 @@ public sealed class DiskFormatter(ISystemRunner systemRunner, ILogger<DiskFormat
 }
 
 /// <summary>Outcome of preparing a disk.</summary>
+/// <summary>
+/// One command a plan will run.
+/// </summary>
+/// <remarks>
+/// Exists so the preview and the run are the same list rather than two descriptions of it that can
+/// disagree. <see cref="ToString"/> is what gets shown, so it has to read as the command it is.
+/// </remarks>
+public sealed record PlannedCommand
+{
+    /// <summary>What this step is for, in words, used when it fails.</summary>
+    public required string Description { get; init; }
+
+    /// <summary>The binary.</summary>
+    public required string File { get; init; }
+
+    /// <summary>Its arguments.</summary>
+    public required ImmutableArray<string> Arguments { get; init; }
+
+    /// <summary>Whether this one makes a filesystem, which cannot run until the kernel has the table.</summary>
+    public bool IsMakeFileSystem => File.StartsWith("mkfs", StringComparison.Ordinal);
+
+    /// <summary>The command as a person would type it.</summary>
+    public override string ToString() => $"{File} {string.Join(' ', Arguments)}";
+}
+
 public sealed record FormatResult
 {
     /// <summary>Whether it worked.</summary>
