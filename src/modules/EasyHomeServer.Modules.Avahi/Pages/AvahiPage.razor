@@ -177,40 +177,117 @@
 
             <MudExpansionPanels Elevation="0" Class="mt-4">
                 <MudExpansionPanel Text="How to advertise a container">
-                    <pre class="av-code"># Reached through a published port on this server: http://%h.local:8096
-services:
+
+                    @* Points at the builder first. Anyone reading this panel is about to hand-write
+                       labels they do not need to hand-write. *@
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-4">
+                        <MudText Typo="Typo.body2">
+                            The compose builder sets these for you — <b>Docker → Services → New project</b>
+                            has an "Advertise on the network" checkbox. This is the reference for writing a
+                            file by hand or using <code>docker run --label</code>.
+                        </MudText>
+                    </MudAlert>
+
+                    @* The split is the thing worth teaching. Everything else follows from which of
+                       these two a container is. *@
+                    <MudText Typo="Typo.body2" Class="mb-4">
+                        How a container is advertised depends on how it is reached, and there are two ways.
+                    </MudText>
+
+                    <MudText Typo="Typo.subtitle2">1. Through a published port on this server</MudText>
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary mb-2">
+                        The usual case. The container sits behind this server, so it is advertised under this
+                        server's name and its published port.
+                        Reachable at <code>http://@(_hostName).local:8096</code>
+                    </MudText>
+
+                    <pre class="av-code">services:
   jellyfin:
     image: jellyfin/jellyfin
     ports:
       - "8096:8096"
     labels:
-      @ContainerServiceMapper.EnableLabel: "true"
-      @ContainerServiceMapper.NameLabel: "Jellyfin on %h"     # optional, how it appears when browsing
-      @ContainerServiceMapper.TypeLabel: "_http._tcp"         # optional, this is the default
-      @ContainerServiceMapper.PortLabel: "8096"               # optional, needed only with several ports
-      @ContainerServiceMapper.PathLabel: "/web"               # optional, published as a TXT record
+      @ContainerServiceMapper.EnableLabel: "true"</pre>
 
-# With its own address on the LAN (macvlan): http://jellyfin.local:8096
-# No "ports:" — it does not go through this server at all.
-services:
+                    <MudText Typo="Typo.subtitle2" Class="mt-5">2. With its own address on the LAN</MudText>
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary mb-2">
+                        On a macvlan network the container is its own machine on the network, with its own
+                        name and no port juggling. It publishes no ports — there is nothing to publish
+                        through — so name the port it listens on.
+                        Reachable at <code>http://jellyfin.local:8096</code>
+                    </MudText>
+
+                    <pre class="av-code">services:
   jellyfin:
     image: jellyfin/jellyfin
     networks:
-      lan: { ipv4_address: 192.168.1.241 }   # a macvlan network, made on the Docker > Networks tab
+      lan:                # macvlan network, made on Docker &rarr; Networks
+        ipv4_address: 192.168.1.241
     labels:
       @ContainerServiceMapper.EnableLabel: "true"
-      @ContainerServiceMapper.HostNameLabel: "jellyfin"       # -> jellyfin.local
-      @ContainerServiceMapper.PortLabel: "8096"               # nothing is published, so name the port
+      @ContainerServiceMapper.HostNameLabel: "jellyfin"
+      @ContainerServiceMapper.PortLabel: "8096"
 
 networks:
   lan:
     external: true</pre>
-                    <MudText Typo="Typo.caption" Class="mud-text-secondary">
-                        Labels are set at creation time, so a running container has to be recreated to pick
-                        them up. <code>%h</code> is replaced with this server's hostname by avahi.
-                        Without <code>@ContainerServiceMapper.HostNameLabel</code>, a container with its own
-                        address takes its name from the container — which Compose builds as
-                        <code>project-service-1</code>.
+
+                    <MudText Typo="Typo.subtitle2" Class="mt-5">Labels</MudText>
+
+                    <MudSimpleTable Dense="true" Hover="true" Elevation="0" Class="av-table mt-2">
+                        <thead>
+                            <tr>
+                                <th>Label</th>
+                                <th>Effect</th>
+                                <th>If omitted</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td class="av-mono">@ContainerServiceMapper.EnableLabel</td>
+                                <td>Set to <code>true</code> to advertise it at all.</td>
+                                <td class="mud-text-secondary">Not advertised</td>
+                            </tr>
+                            <tr>
+                                <td class="av-mono">@ContainerServiceMapper.HostNameLabel</td>
+                                <td>
+                                    Its <code>.local</code> name. Only for a container with its own LAN address;
+                                    one behind a published port answers on this server's name.
+                                </td>
+                                <td class="mud-text-secondary">
+                                    The container name — which Compose builds as <code>project-service-1</code>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td class="av-mono">@ContainerServiceMapper.PortLabel</td>
+                                <td>Which port to advertise.</td>
+                                <td class="mud-text-secondary">
+                                    The only published port; required if there are several, or if it has its own
+                                    LAN address
+                                </td>
+                            </tr>
+                            <tr>
+                                <td class="av-mono">@ContainerServiceMapper.NameLabel</td>
+                                <td>How it reads when browsing the network. <code>%h</code> is this server's hostname.</td>
+                                <td class="mud-text-secondary">The hostname, or "&lt;container&gt; on %h"</td>
+                            </tr>
+                            <tr>
+                                <td class="av-mono">@ContainerServiceMapper.TypeLabel</td>
+                                <td>DNS-SD service type, for example <code>_smb._tcp</code>.</td>
+                                <td class="mud-text-secondary"><code>_http._tcp</code></td>
+                            </tr>
+                            <tr>
+                                <td class="av-mono">@ContainerServiceMapper.PathLabel</td>
+                                <td>Published as a TXT record, for browsers that use it.</td>
+                                <td class="mud-text-secondary">No TXT record</td>
+                            </tr>
+                        </tbody>
+                    </MudSimpleTable>
+
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-3">
+                        Labels are fixed when a container is created, so a running container has to be
+                        recreated to pick them up — <code>compose up</code> does that for you. Anything not
+                        advertised says why on the list above.
                     </MudText>
                 </MudExpansionPanel>
             </MudExpansionPanels>

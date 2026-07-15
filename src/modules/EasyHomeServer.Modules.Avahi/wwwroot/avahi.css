@@ -50,3 +50,15 @@
     line-height: 1.4;
     white-space: normal;
 }
+
+/* Label reference: the label column is the identifier being looked up, so it must not wrap
+   mid-name, while the prose columns should. */
+.av-table td.av-mono {
+    white-space: nowrap;
+    vertical-align: top;
+    padding-right: 1.5rem;
+}
+
+.av-table td {
+    white-space: normal;
+}

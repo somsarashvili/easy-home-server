@@ -109,8 +109,11 @@
         _interfaces = Cli.ListPhysicalInterfaces();
     }
 
-    private async Task OnDriverChanged(string driver)
+    private async Task OnDriverChanged(string? driver)
     {
+        if (driver is null)
+            return;
+
         _spec.Driver = driver;
         _error = null;
 
@@ -122,8 +125,11 @@
         }
     }
 
-    private async Task OnParentChanged(string parent)
+    private async Task OnParentChanged(string? parent)
     {
+        if (parent is null)
+            return;
+        
         _spec.Parent = parent;
 
         var (subnet, gateway) = await Cli.DescribeInterfaceAsync(parent);
