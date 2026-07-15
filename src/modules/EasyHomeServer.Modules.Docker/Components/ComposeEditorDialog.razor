@@ -1,8 +1,9 @@
 @inject ComposeCli Compose
-@inject ISnackbar Snackbar
+@inject DockerPoller Poller
 
-@* Editing a compose file, with validation before it is written. Validate runs `compose config`
-   against a temporary copy, so a typo is caught before it can replace a working project's file. *@
+@* Two views of one file. The builder covers the common case; YAML is always reachable, because
+   compose is far larger than any form and pretending otherwise would make the tool a ceiling
+   rather than a help. Switching either way re-parses or re-renders, so they never drift. *@
 
 <MudDialog>
     <TitleContent>
@@ -17,19 +18,176 @@
         {
             <MudTextField @bind-Value="_name"
                           Label="Project name"
-                          HelperText="Lowercase letters, digits, dashes and underscores. Used for the directory and for container names."
+                          HelperText="Lowercase letters, digits, dashes and underscores. Names the directory and the containers."
                           Immediate="true"
                           Error="@(_nameError is not null)"
                           ErrorText="@_nameError"
-                          Class="mb-4" />
+                          Class="mb-3" />
         }
 
-        <MudTextField @bind-Value="_yaml"
-                      Label="compose.yaml"
-                      Lines="18"
-                      Immediate="false"
-                      Variant="Variant.Outlined"
-                      Class="dk-yaml" />
+        <MudToggleGroup T="EditorMode" Value="_mode" ValueChanged="OnModeChanged" Color="Color.Primary"
+                        Size="Size.Small" CheckMark="true" Class="mb-4">
+            <MudToggleItem Value="EditorMode.Builder" Text="Builder" />
+            <MudToggleItem Value="EditorMode.Yaml" Text="YAML" />
+        </MudToggleGroup>
+
+        @if (_modeError is not null)
+        {
+            @* The builder cannot open a file it cannot parse; saying so beats showing an empty
+               form over someone's working project. *@
+            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                @_modeError
+            </MudAlert>
+        }
+
+        @if (_commentWarning)
+        {
+            @* YAML comments are not part of the document model, so a round trip drops them. Said
+               out loud rather than discovered afterwards. *@
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3"
+                      ShowCloseIcon="true" CloseIconClicked="@(() => _commentWarning = false)">
+                This file has comments. The builder cannot keep them — switch back to YAML before
+                saving if you want them preserved.
+            </MudAlert>
+        }
+
+        @if (_mode == EditorMode.Builder)
+        {
+            @if (_file is null)
+            {
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">Nothing to show.</MudText>
+            }
+            else
+            {
+                @foreach (var service in _file.Services)
+                {
+                    <MudPaper Class="pa-3 mb-3" Elevation="0" Outlined="true">
+                        <div class="d-flex align-center mb-2">
+                            <MudTextField @bind-Value="service.Name" Label="Service name" Immediate="true"
+                                          Variant="Variant.Text" Class="mr-3" Style="max-width:14rem" />
+                            <MudSpacer />
+
+                            @if (service.IsAdvanced)
+                            {
+                                <MudTooltip Text="@service.AdvancedReason">
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                             Color="Color.Warning" Class="dk-chip">YAML only</MudChip>
+                                </MudTooltip>
+                            }
+
+                            <MudTooltip Text="Remove this service">
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                               aria-label="@($"Remove service {service.Name}")"
+                                               OnClick="@(() => _file.Services.Remove(service))" />
+                            </MudTooltip>
+                        </div>
+
+                        @if (service.IsAdvanced)
+                        {
+                            @* Shown, not editable, and preserved byte-for-byte on save. Rendering
+                               empty boxes for fields this service really has would erase them. *@
+                            <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                                @service.AdvancedReason Its definition is kept exactly as written; edit it on the
+                                YAML tab.
+                            </MudText>
+                        }
+                        else
+                        {
+                            <MudGrid>
+                                <MudItem xs="12" sm="6">
+                                    <MudTextField @bind-Value="service.Image" Label="Image" Placeholder="nginx:alpine"
+                                                  Immediate="true" />
+                                </MudItem>
+                                <MudItem xs="12" sm="6">
+                                    <MudSelect @bind-Value="service.Restart" Label="Restart policy">
+                                        <MudSelectItem Value="@("unless-stopped")">unless-stopped</MudSelectItem>
+                                        <MudSelectItem Value="@("always")">always</MudSelectItem>
+                                        <MudSelectItem Value="@("on-failure")">on-failure</MudSelectItem>
+                                        <MudSelectItem Value="@("no")">no</MudSelectItem>
+                                    </MudSelect>
+                                </MudItem>
+
+                                <MudItem xs="12" sm="6">
+                                    <MudSelect Value="service.Network" T="string" Label="Network" Clearable="true"
+                                               ValueChanged="@(v => OnNetworkChanged(service, v))">
+                                        <MudSelectItem Value="@("")">(project default)</MudSelectItem>
+                                        @foreach (var network in AttachableNetworks)
+                                        {
+                                            <MudSelectItem Value="@network.Name">
+                                                @network.Name@(network.Driver is "macvlan" or "ipvlan" ? " — own LAN address" : "")
+                                            </MudSelectItem>
+                                        }
+                                    </MudSelect>
+                                </MudItem>
+
+                                @if (IsLanNetwork(service.Network))
+                                {
+                                    <MudItem xs="12" sm="6">
+                                        <MudTextField @bind-Value="service.Ipv4Address" Label="Fixed LAN address"
+                                                      Immediate="true"
+                                                      HelperText="@LanAddressHint(service.Network)" />
+                                    </MudItem>
+                                }
+                                else
+                                {
+                                    <MudItem xs="12" sm="6">
+                                        <MudTextField @bind-Value="_portsText[service]" Label="Ports" Lines="2"
+                                                      Variant="Variant.Outlined" Placeholder="8080:80"
+                                                      HelperText="One per line, host:container."
+                                                      TextChanged="@(v => service.Ports = SplitLines(v))" />
+                                    </MudItem>
+                                }
+
+                                <MudItem xs="12" sm="6">
+                                    <MudTextField @bind-Value="_volumesText[service]" Label="Volumes" Lines="2"
+                                                  Variant="Variant.Outlined" Placeholder="data:/var/lib/x"
+                                                  HelperText="One per line, source:/target[:ro]."
+                                                  TextChanged="@(v => service.Volumes = SplitLines(v))" />
+                                </MudItem>
+                                <MudItem xs="12" sm="6">
+                                    <MudTextField @bind-Value="_environmentText[service]" Label="Environment" Lines="2"
+                                                  Variant="Variant.Outlined" Placeholder="TZ=Europe/London"
+                                                  HelperText="One per line, KEY=value."
+                                                  TextChanged="@(v => service.Environment = SplitLines(v))" />
+                                </MudItem>
+
+                                <MudItem xs="12">
+                                    @* The label contract is this module's own, and nobody should have
+                                       to memorise it to use the feature it unlocks. *@
+                                    <MudCheckBox T="bool" Value="@IsAdvertised(service)" Color="Color.Primary" Dense="true"
+                                                 ValueChanged="@(v => SetAdvertised(service, v))"
+                                                 Label="Advertise on the network (mDNS)" />
+
+                                    @if (IsAdvertised(service) && IsLanNetwork(service.Network))
+                                    {
+                                        <MudTextField Value="@GetLabel(service, "easyhomeserver.avahi.port")" Label="Port to advertise"
+                                                      Immediate="true" Class="ml-8"
+                                                      Style="max-width:14rem"
+                                                      HelperText="It has no published ports, so name the port it listens on."
+                                                      ValueChanged="@((string v) => SetLabel(service, "easyhomeserver.avahi.port", v))"
+                                                      T="string" />
+                                    }
+                                </MudItem>
+                            </MudGrid>
+                        }
+                    </MudPaper>
+                }
+
+                <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Outlined" Size="Size.Small"
+                           OnClick="AddService">
+                    Add service
+                </MudButton>
+            }
+        }
+        else
+        {
+            <MudTextField @bind-Value="_yaml"
+                          Label="compose.yaml"
+                          Lines="20"
+                          Immediate="false"
+                          Variant="Variant.Outlined"
+                          Class="dk-yaml" />
+        }
 
         @if (_validation is not null)
         {
@@ -39,14 +197,10 @@
                 <pre class="dk-validation">@_validation.Message</pre>
             </MudAlert>
         }
-
-        <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-3">
-            Saved to <code>@Compose.ComposeFileFor(IsNew ? (_name is { Length: > 0 } ? _name : "<name>") : ProjectName)</code>
-        </MudText>
     </DialogContent>
 
     <DialogActions>
-        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton OnClick="@(() => Dialog.Cancel())" Disabled="_busy">Cancel</MudButton>
         <MudButton OnClick="ValidateAsync" Disabled="_busy">Validate</MudButton>
         <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="SaveAsync" Disabled="_busy">
             @(IsNew ? "Create and start" : "Save and apply")
@@ -66,33 +220,282 @@
     [Parameter]
     public string Yaml { get; set; } = string.Empty;
 
+    private enum EditorMode
+    {
+        Builder,
+        Yaml,
+    }
+
+    private EditorMode _mode = EditorMode.Builder;
+    private ComposeFile? _file;
     private string _name = string.Empty;
     private string _yaml = string.Empty;
     private string? _nameError;
+    private string? _modeError;
+    private bool _commentWarning;
     private DockerActionResult? _validation;
     private bool _busy;
 
+    // Multi-line fields are edited as text and split on change; keyed by service so a rename or
+    // reorder does not shuffle the boxes.
+    private readonly Dictionary<ComposeServiceSpec, string> _portsText = [];
+    private readonly Dictionary<ComposeServiceSpec, string> _volumesText = [];
+    private readonly Dictionary<ComposeServiceSpec, string> _environmentText = [];
+
     private bool IsNew => string.IsNullOrEmpty(ProjectName);
+
+    /// <summary>
+    /// Networks a service can be put on. The project's own default is offered as the empty
+    /// choice; the rest are real networks, referenced as external.
+    /// </summary>
+    private IEnumerable<DockerNetwork> AttachableNetworks =>
+        (Poller.Latest?.Networks ?? []).Where(n => n.Name is not ("host" or "none"));
 
     protected override void OnInitialized()
     {
         _name = ProjectName;
+        _yaml = Yaml.Length > 0 ? Yaml : StarterYaml();
+        _commentWarning = ComposeYaml.HasComments(_yaml);
 
-        // A starter file rather than a blank box: it shows the shape of a compose file and the
-        // avahi label, which is otherwise only discoverable by reading the other module's page.
-        _yaml = Yaml.Length > 0
-            ? Yaml
-            : """
-              services:
-                web:
-                  image: nginx:alpine
-                  ports:
-                    - "8081:80"
-                  restart: unless-stopped
-                  labels:
-                    easyhomeserver.avahi.enable: "true"
-              """;
+        var parsed = ComposeYaml.Parse(_yaml);
+
+        if (parsed.File is null)
+        {
+            // Cannot show a form for a file that does not parse; start in YAML with the reason.
+            _mode = EditorMode.Yaml;
+            _modeError = $"This file could not be parsed, so the builder is unavailable: {parsed.Error}";
+
+            return;
+        }
+
+        _file = parsed.File;
+        SyncTextFields();
     }
+
+    /// <summary>
+    /// The starter file. Uses this machine's real macvlan network when one exists, rather than a
+    /// placeholder the operator would have to translate.
+    /// </summary>
+    private string StarterYaml()
+    {
+        var lan = AttachableNetworks.FirstOrDefault(n => n.Driver is "macvlan" or "ipvlan");
+
+        if (lan is null)
+        {
+            return """
+                   services:
+                     web:
+                       image: nginx:alpine
+                       restart: unless-stopped
+                       ports:
+                         - "8081:80"
+                       labels:
+                         easyhomeserver.avahi.enable: "true"
+                   """;
+        }
+
+        // A macvlan exists, so show the shape that uses it: no ports, its own address, and the
+        // port named explicitly because there is nothing published to infer it from.
+        return $"""
+                services:
+                  web:
+                    image: nginx:alpine
+                    restart: unless-stopped
+                    networks:
+                      {lan.Name}:
+                        ipv4_address: {SuggestLanAddress(lan.Name)}
+                    labels:
+                      easyhomeserver.avahi.enable: "true"
+                      easyhomeserver.avahi.port: "80"
+
+                networks:
+                  {lan.Name}:
+                    external: true
+                """;
+    }
+
+    private bool IsLanNetwork(string? name) =>
+        name is { Length: > 0 }
+        && AttachableNetworks.FirstOrDefault(n => n.Name == name)?.Driver is "macvlan" or "ipvlan";
+
+    private string LanAddressHint(string network) =>
+        $"Its own address on the LAN. Must sit inside the network's range{(SuggestLanAddress(network) is { Length: > 0 } s ? $", for example {s}" : "")}.";
+
+    /// <summary>
+    /// Suggests a free-looking address in a macvlan's range: the range's own base plus two,
+    /// leaving the base for the host shim and one spare.
+    /// </summary>
+    private string SuggestLanAddress(string network)
+    {
+        var subnet = AttachableNetworks.FirstOrDefault(n => n.Name == network)?.Subnets.FirstOrDefault();
+
+        if (subnet is null || !System.Net.IPAddress.TryParse(subnet.Split('/')[0], out var address))
+        {
+            return string.Empty;
+        }
+
+        var bytes = address.GetAddressBytes();
+
+        // Nothing better than a guess without the range, which the network list does not carry;
+        // the field is editable and the hint says "for example".
+        bytes[3] = (byte)Math.Min(bytes[3] + 242, 254);
+
+        return new System.Net.IPAddress(bytes).ToString();
+    }
+
+    private static List<string> SplitLines(string? value) =>
+        [.. (value ?? string.Empty).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
+
+    private void SyncTextFields()
+    {
+        if (_file is null)
+        {
+            return;
+        }
+
+        foreach (var service in _file.Services)
+        {
+            _portsText[service] = string.Join('\n', service.Ports);
+            _volumesText[service] = string.Join('\n', service.Volumes);
+            _environmentText[service] = string.Join('\n', service.Environment);
+        }
+    }
+
+    /// <summary>
+    /// Switches view, converting in whichever direction is needed so the two never drift apart.
+    /// </summary>
+    private void OnModeChanged(EditorMode mode)
+    {
+        _modeError = null;
+        _validation = null;
+
+        if (mode == _mode)
+        {
+            return;
+        }
+
+        if (mode == EditorMode.Yaml)
+        {
+            // Builder is the truth: render it.
+            if (_file is not null)
+            {
+                _yaml = ComposeYaml.Serialize(_file);
+            }
+
+            _mode = mode;
+
+            return;
+        }
+
+        // YAML is the truth: parse it. Refuse rather than open a form over a file that does not
+        // parse — saving that form would replace the file with whatever the empty form held.
+        var parsed = ComposeYaml.Parse(_yaml);
+
+        if (parsed.File is null)
+        {
+            _modeError = $"The builder cannot open this file: {parsed.Error}";
+
+            return;
+        }
+
+        _commentWarning = ComposeYaml.HasComments(_yaml);
+        _file = parsed.File;
+        SyncTextFields();
+        _mode = mode;
+    }
+
+    private void AddService()
+    {
+        var service = new ComposeServiceSpec
+        {
+            Name = $"service{(_file!.Services.Count + 1)}",
+            Image = string.Empty,
+            Restart = "unless-stopped",
+        };
+
+        _file.Services.Add(service);
+        _portsText[service] = string.Empty;
+        _volumesText[service] = string.Empty;
+        _environmentText[service] = string.Empty;
+    }
+
+    /// <summary>
+    /// Attaching to a network also has to declare it at the top level, or compose refuses the
+    /// file with "network X is undeclared".
+    /// </summary>
+    private void OnNetworkChanged(ComposeServiceSpec service, string? network)
+    {
+        service.Network = network ?? string.Empty;
+
+        if (service.Network.Length > 0)
+        {
+            // External, not defined here: the Networks tab is where a macvlan gets its host
+            // address reserved and its shim registered, neither of which compose can do.
+            _file!.ExternalNetworks[service.Network] = true;
+        }
+
+        if (!IsLanNetwork(service.Network))
+        {
+            service.Ipv4Address = string.Empty;
+        }
+        else
+        {
+            // A container on a macvlan answers on its own address, so a published port is
+            // meaningless and compose rejects the combination.
+            service.Ports.Clear();
+            _portsText[service] = string.Empty;
+
+            if (service.Ipv4Address.Length == 0)
+            {
+                service.Ipv4Address = SuggestLanAddress(service.Network);
+            }
+        }
+
+        // Drop declarations nothing references any more.
+        foreach (var name in _file!.ExternalNetworks.Keys.ToList())
+        {
+            if (!_file.Services.Any(s => s.Network == name))
+            {
+                _file.ExternalNetworks.Remove(name);
+            }
+        }
+    }
+
+    private static bool IsAdvertised(ComposeServiceSpec service) =>
+        service.Labels.TryGetValue("easyhomeserver.avahi.enable", out var value)
+        && value.Equals("true", StringComparison.OrdinalIgnoreCase);
+
+    private void SetAdvertised(ComposeServiceSpec service, bool advertised)
+    {
+        if (advertised)
+        {
+            service.Labels["easyhomeserver.avahi.enable"] = "true";
+        }
+        else
+        {
+            service.Labels.Remove("easyhomeserver.avahi.enable");
+            service.Labels.Remove("easyhomeserver.avahi.port");
+        }
+    }
+
+    private static string GetLabel(ComposeServiceSpec service, string key) =>
+        service.Labels.TryGetValue(key, out var value) ? value : string.Empty;
+
+    private static void SetLabel(ComposeServiceSpec service, string key, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            service.Labels.Remove(key);
+        }
+        else
+        {
+            service.Labels[key] = value.Trim();
+        }
+    }
+
+    /// <summary>The YAML to save: rendered from the builder, or the raw text when on that tab.</summary>
+    private string CurrentYaml() =>
+        _mode == EditorMode.Builder && _file is not null ? ComposeYaml.Serialize(_file) : _yaml;
 
     private async Task ValidateAsync()
     {
@@ -100,7 +503,8 @@
 
         try
         {
-            _validation = await Compose.ValidateAsync(_yaml);
+            // Validated by compose itself: only compose agrees with compose about what is valid.
+            _validation = await Compose.ValidateAsync(CurrentYaml());
         }
         finally
         {
@@ -124,7 +528,7 @@
         {
             // Save validates first and refuses to write an invalid file, so a broken edit cannot
             // replace a working one.
-            var saved = await Compose.SaveAsync(name, _yaml);
+            var saved = await Compose.SaveAsync(name, CurrentYaml());
 
             if (!saved.Succeeded)
             {

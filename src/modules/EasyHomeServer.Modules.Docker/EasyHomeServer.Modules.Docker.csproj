@@ -29,6 +29,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!--
+      A genuinely module-private dependency: the host has never heard of it, so it ships in this
+      module's package and loads into this module's own AssemblyLoadContext. This is the case the
+      per-module context exists for — another module could depend on a different YamlDotNet and
+      neither would notice.
+    -->
+    <PackageReference Include="YamlDotNet" Version="18.1.0" />
+
     <PackageReference Include="MudBlazor" Version="9.7.0" ExcludeAssets="runtime" />
     <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" Version="10.0.10"
                       ExcludeAssets="runtime"
