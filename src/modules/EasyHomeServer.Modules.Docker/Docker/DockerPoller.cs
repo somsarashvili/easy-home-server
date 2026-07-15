@@ -16,6 +16,7 @@ namespace EasyHomeServer.Modules.Docker.Docker;
 public sealed class DockerPoller : ModuleBackgroundService
 {
     private readonly DockerCli _cli;
+    private readonly ComposeDiscovery _compose;
     private readonly IEventBus _eventBus;
     private readonly TimeSpan _interval;
 
@@ -29,10 +30,16 @@ public sealed class DockerPoller : ModuleBackgroundService
     public DockerCli.Availability Availability { get; private set; } =
         new() { IsAvailable = false, Reason = "Not checked yet." };
 
-    public DockerPoller(DockerCli cli, IEventBus eventBus, DockerOptions options, ILoggerFactory loggerFactory)
+    public DockerPoller(
+        DockerCli cli,
+        ComposeDiscovery compose,
+        IEventBus eventBus,
+        DockerOptions options,
+        ILoggerFactory loggerFactory)
         : base(loggerFactory)
     {
         _cli = cli;
+        _compose = compose;
         _eventBus = eventBus;
         _interval = TimeSpan.FromSeconds(options.PollIntervalSeconds);
     }
@@ -88,6 +95,10 @@ public sealed class DockerPoller : ModuleBackgroundService
                 Images = WithUsageCounts(images, containers),
                 Volumes = WithUsageCounts(volumes, containers),
                 Networks = WithUsageCounts(networks, containers),
+
+                // Derived from the containers just read plus a directory scan; no extra docker
+                // calls, so it costs nothing beyond the scan.
+                Projects = _compose.Discover(containers),
             };
 
             Latest = snapshot;

@@ -30,6 +30,9 @@ public sealed record DockerSnapshot
     /// <summary>Every network.</summary>
     public ImmutableArray<DockerNetwork> Networks { get; init; } = [];
 
+    /// <summary>Compose projects, merged from container labels and the stacks directory.</summary>
+    public ImmutableArray<ComposeProject> Projects { get; init; } = [];
+
     /// <summary>Count of containers currently running.</summary>
     public int RunningCount => Containers.Count(c => c.IsRunning);
 

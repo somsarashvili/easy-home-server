@@ -29,6 +29,31 @@ public interface ISystemRunner
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Runs an executable with an explicit timeout, for work that legitimately takes minutes.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The default timeout suits the overwhelming majority of system commands, which either
+    /// answer immediately or are broken. Some genuinely do not: <c>docker compose up</c> pulling
+    /// images, a filesystem check, a zone transfer. Those need a bound chosen for the job rather
+    /// than being killed halfway through, which for a pull means a half-downloaded layer and a
+    /// container that never starts.
+    /// </para>
+    /// <para>
+    /// A default implementation is provided so that adding this did not break every module
+    /// already compiled against the SDK. It ignores the timeout and defers to the standard
+    /// overload; the host overrides it properly. Do not rely on the default.
+    /// </para>
+    /// </remarks>
+    /// <param name="timeout">How long to allow before the process is terminated.</param>
+    Task<ProcessResult> RunAsync(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+        => RunAsync(fileName, arguments, cancellationToken);
+
     /// <summary>Reads a system file. Throws <see cref="SystemOperationException"/> if unreadable.</summary>
     Task<string> ReadFileAsync(string path, CancellationToken cancellationToken = default);
 

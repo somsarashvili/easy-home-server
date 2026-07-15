@@ -26,7 +26,7 @@ namespace EasyHomeServer.Modules.Docker.Docker;
 /// serves, in full.
 /// </para>
 /// </remarks>
-public sealed class DockerCli(ISystemRunner systemRunner, ILogger<DockerCli> logger)
+public sealed class DockerCli(ISystemRunner systemRunner, DockerOptions options, ILogger<DockerCli> logger)
 {
     private const string Executable = "docker";
 
@@ -235,6 +235,115 @@ public sealed class DockerCli(ISystemRunner systemRunner, ILogger<DockerCli> log
     /// <summary>Removes every dangling image.</summary>
     public Task<DockerActionResult> PruneImagesAsync(CancellationToken cancellationToken = default) =>
         ActionAsync(["image", "prune", "--force"], "prune images", cancellationToken);
+
+    /// <summary>Creates a volume.</summary>
+    public Task<DockerActionResult> CreateVolumeAsync(
+        string name,
+        string driver = "local",
+        CancellationToken cancellationToken = default) =>
+        ActionAsync(["volume", "create", "--driver", driver, name], $"create volume {name}", cancellationToken);
+
+    /// <summary>Creates a network.</summary>
+    public Task<DockerActionResult> CreateNetworkAsync(
+        string name,
+        string driver = "bridge",
+        CancellationToken cancellationToken = default) =>
+        ActionAsync(["network", "create", "--driver", driver, name], $"create network {name}", cancellationToken);
+
+    /// <summary>
+    /// Creates and starts a container.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every value the operator typed is passed as its own argument via
+    /// <see cref="ISystemRunner"/>, which never builds a shell command line. A port mapping of
+    /// <c>8080:80; rm -rf /</c> is therefore handed to docker as one nonsensical argument and
+    /// rejected, rather than being run.
+    /// </para>
+    /// <para>
+    /// The long timeout is because this pulls the image when it is not present locally.
+    /// </para>
+    /// </remarks>
+    public async Task<DockerActionResult> CreateContainerAsync(
+        ContainerSpec spec,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+
+        if (spec.Validate() is { } error)
+        {
+            return new DockerActionResult { Succeeded = false, Message = error };
+        }
+
+        var arguments = new List<string> { "run", "--detach", "--name", spec.Name };
+
+        if (spec.RestartPolicy is { Length: > 0 } restart && restart != "no")
+        {
+            arguments.Add("--restart");
+            arguments.Add(restart);
+        }
+
+        foreach (var port in spec.ParsePorts())
+        {
+            arguments.Add("--publish");
+            arguments.Add(port);
+        }
+
+        foreach (var volume in spec.ParseVolumes())
+        {
+            arguments.Add("--volume");
+            arguments.Add(volume);
+        }
+
+        foreach (var variable in spec.ParseEnvironment())
+        {
+            arguments.Add("--env");
+            arguments.Add(variable);
+        }
+
+        foreach (var label in spec.ParseLabels())
+        {
+            arguments.Add("--label");
+            arguments.Add(label);
+        }
+
+        if (spec.Network is { Length: > 0 } network)
+        {
+            arguments.Add("--network");
+            arguments.Add(network);
+        }
+
+        arguments.Add(spec.Image);
+
+        // Anything after the image is the container's own command, not docker's.
+        arguments.AddRange(spec.ParseCommand());
+
+        logger.LogInformation("docker {Arguments}", string.Join(' ', arguments));
+
+        try
+        {
+            var result = await systemRunner
+                .RunAsync(Executable, arguments, options.ComposeUpTimeout, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (result.Succeeded)
+            {
+                return new DockerActionResult { Succeeded = true, Message = $"Created {spec.Name}." };
+            }
+
+            var detail = result.StandardError.Trim();
+
+            return new DockerActionResult
+            {
+                Succeeded = false,
+                Message = detail.Length > 0 ? detail : $"Could not create {spec.Name}: exit code {result.ExitCode}.",
+            };
+        }
+        catch (SystemOperationException ex)
+        {
+            return new DockerActionResult { Succeeded = false, Message = $"Could not create {spec.Name}: {ex.Message}" };
+        }
+    }
 
     private async Task<DockerActionResult> ActionAsync(
         string[] arguments,

@@ -90,3 +90,24 @@
     white-space: pre-wrap;
     word-break: break-word;
 }
+
+/* Compose YAML editor. Monospace with preserved indentation: YAML is whitespace-significant and
+   a proportional font makes a misaligned key impossible to spot. */
+.dk-yaml textarea {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    tab-size: 2;
+    white-space: pre;
+    overflow-wrap: normal;
+    overflow-x: auto;
+}
+
+/* compose's validation errors arrive multi-line and pre-formatted. */
+.dk-validation {
+    margin: 0;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.75rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+}

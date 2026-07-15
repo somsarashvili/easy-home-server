@@ -1,0 +1,143 @@
+@inject ComposeCli Compose
+@inject ISnackbar Snackbar
+
+@* Editing a compose file, with validation before it is written. Validate runs `compose config`
+   against a temporary copy, so a typo is caught before it can replace a working project's file. *@
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center">
+            <MudIcon Icon="@Icons.Material.Filled.Description" Class="mr-2" />
+            <MudText Typo="Typo.h6">@(IsNew ? "New compose project" : $"Edit {ProjectName}")</MudText>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (IsNew)
+        {
+            <MudTextField @bind-Value="_name"
+                          Label="Project name"
+                          HelperText="Lowercase letters, digits, dashes and underscores. Used for the directory and for container names."
+                          Immediate="true"
+                          Error="@(_nameError is not null)"
+                          ErrorText="@_nameError"
+                          Class="mb-4" />
+        }
+
+        <MudTextField @bind-Value="_yaml"
+                      Label="compose.yaml"
+                      Lines="18"
+                      Immediate="false"
+                      Variant="Variant.Outlined"
+                      Class="dk-yaml" />
+
+        @if (_validation is not null)
+        {
+            <MudAlert Severity="@(_validation.Succeeded ? Severity.Success : Severity.Error)"
+                      Variant="Variant.Outlined"
+                      Class="mt-3">
+                <pre class="dk-validation">@_validation.Message</pre>
+            </MudAlert>
+        }
+
+        <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-3">
+            Saved to <code>@Compose.ComposeFileFor(IsNew ? (_name is { Length: > 0 } ? _name : "<name>") : ProjectName)</code>
+        </MudText>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton OnClick="ValidateAsync" Disabled="_busy">Validate</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="SaveAsync" Disabled="_busy">
+            @(IsNew ? "Create and start" : "Save and apply")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance Dialog { get; set; } = default!;
+
+    /// <summary>Existing project name. Empty for a new project.</summary>
+    [Parameter]
+    public string ProjectName { get; set; } = string.Empty;
+
+    /// <summary>Existing file content. Empty for a new project.</summary>
+    [Parameter]
+    public string Yaml { get; set; } = string.Empty;
+
+    private string _name = string.Empty;
+    private string _yaml = string.Empty;
+    private string? _nameError;
+    private DockerActionResult? _validation;
+    private bool _busy;
+
+    private bool IsNew => string.IsNullOrEmpty(ProjectName);
+
+    protected override void OnInitialized()
+    {
+        _name = ProjectName;
+
+        // A starter file rather than a blank box: it shows the shape of a compose file and the
+        // avahi label, which is otherwise only discoverable by reading the other module's page.
+        _yaml = Yaml.Length > 0
+            ? Yaml
+            : """
+              services:
+                web:
+                  image: nginx:alpine
+                  ports:
+                    - "8081:80"
+                  restart: unless-stopped
+                  labels:
+                    easyhomeserver.avahi.enable: "true"
+              """;
+    }
+
+    private async Task ValidateAsync()
+    {
+        _busy = true;
+
+        try
+        {
+            _validation = await Compose.ValidateAsync(_yaml);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        var name = IsNew ? _name : ProjectName;
+        _nameError = IsNew ? ComposeCli.ValidateProjectName(name) : null;
+
+        if (_nameError is not null)
+        {
+            return;
+        }
+
+        _busy = true;
+
+        try
+        {
+            // Save validates first and refuses to write an invalid file, so a broken edit cannot
+            // replace a working one.
+            var saved = await Compose.SaveAsync(name, _yaml);
+
+            if (!saved.Succeeded)
+            {
+                _validation = saved;
+
+                return;
+            }
+
+            Dialog.Close(DialogResult.Ok(name));
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

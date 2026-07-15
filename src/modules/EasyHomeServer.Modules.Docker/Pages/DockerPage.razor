@@ -5,6 +5,7 @@
 @inject IEventBus EventBus
 @inject DockerPoller Poller
 @inject DockerCli Cli
+@inject ComposeCli Compose
 @inject DockerOptions Options
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
@@ -52,7 +53,219 @@ else
 {
     <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" Class="dk-tabs">
 
+        <MudTabPanel Text="@($"Services ({_snapshot.Projects.Length})")" Icon="@Icons.Material.Filled.Dashboard">
+            <div class="d-flex align-center justify-space-between mb-4">
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                    Compose projects, found from running containers and from
+                    <code>@Options.ComposeProjectsPath</code>.
+                </MudText>
+
+                @if (Options.AllowCreate && _composeAvailable)
+                {
+                    <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Filled" Color="Color.Primary"
+                               Size="Size.Small" OnClick="NewProject">
+                        New project
+                    </MudButton>
+                }
+            </div>
+
+            @if (!_composeAvailable)
+            {
+                <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined">
+                    <MudText Typo="Typo.subtitle2">Compose is not installed</MudText>
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary mt-1">
+                        Install it with <code>apt install docker-compose</code>. Existing projects are still
+                        listed below, but cannot be managed from here.
+                    </MudText>
+                </MudAlert>
+            }
+
+            @if (_snapshot.Projects.Length == 0)
+            {
+                <MudPaper Class="pa-8 d-flex flex-column align-center mt-4" Elevation="0">
+                    <MudIcon Icon="@Icons.Material.Filled.Dashboard" Size="Size.Large" Class="mud-text-secondary mb-3" />
+                    <MudText Typo="Typo.h6" GutterBottom="true">No compose projects</MudText>
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary" Align="Align.Center">
+                        A compose project groups related containers into one unit you start and stop together.
+                    </MudText>
+                </MudPaper>
+            }
+            else
+            {
+                @foreach (var project in _snapshot.Projects)
+                {
+                    <MudPaper Class="pa-4 mb-4" Elevation="0">
+                        <div class="d-flex align-center justify-space-between mb-3">
+                            <div>
+                                <div class="d-flex align-center">
+                                    <MudText Typo="Typo.h6">@project.Name</MudText>
+                                    <MudChip T="string" Size="Size.Small" Color="@ProjectColor(project)"
+                                             Variant="Variant.Filled" Class="ml-3 dk-chip">
+                                        @ProjectLabel(project)
+                                    </MudChip>
+
+                                    @if (!project.IsManaged)
+                                    {
+                                        @* Its file lives somewhere this module does not own, so it is
+                                           shown and controlled but never rewritten. *@
+                                        <MudTooltip Text="Defined outside the projects directory, so it can be started and stopped here but not edited.">
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                                     Color="Color.Default" Class="ml-2 dk-chip">external</MudChip>
+                                        </MudTooltip>
+                                    }
+                                </div>
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary dk-mono">
+                                    @(project.ConfigFiles.FirstOrDefault() ?? "(compose file not known)")
+                                </MudText>
+                            </div>
+
+                            @if (Options.AllowContainerControl && _composeAvailable && project.IsActionable)
+                            {
+                                <div class="d-flex align-center">
+                                    @if (_projectBusy == project.Name)
+                                    {
+                                        <MudProgressCircular Color="Color.Primary" Size="Size.Small" Indeterminate="true" Class="mr-3" />
+                                    }
+
+                                    @if (project.IsManaged)
+                                    {
+                                        <MudTooltip Text="Edit compose file">
+                                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                                           aria-label="@($"Edit compose file for {project.Name}")"
+                                                           Disabled="@(_projectBusy is not null)"
+                                                           OnClick="@(() => EditProject(project))" />
+                                        </MudTooltip>
+                                    }
+
+                                    <MudTooltip Text="Pull newer images">
+                                        <MudIconButton Icon="@Icons.Material.Filled.CloudDownload" Size="Size.Small"
+                                                       aria-label="@($"Pull images for {project.Name}")"
+                                                       Disabled="@(_projectBusy is not null)"
+                                                       OnClick="@(() => RunProject(project, "Pulled images for", () => Compose.PullAsync(project)))" />
+                                    </MudTooltip>
+
+                                    @if (project.Status is ComposeProjectStatus.Running or ComposeProjectStatus.Partial)
+                                    {
+                                        <MudTooltip Text="Restart">
+                                            <MudIconButton Icon="@Icons.Material.Filled.RestartAlt" Size="Size.Small"
+                                                           aria-label="@($"Restart {project.Name}")"
+                                                           Disabled="@(_projectBusy is not null)"
+                                                           OnClick="@(() => RunProject(project, "Restarted", () => Compose.RestartAsync(project)))" />
+                                        </MudTooltip>
+                                        <MudTooltip Text="Stop (containers are kept)">
+                                            <MudIconButton Icon="@Icons.Material.Filled.Stop" Size="Size.Small" Color="Color.Warning"
+                                                           aria-label="@($"Stop {project.Name}")"
+                                                           Disabled="@(_projectBusy is not null)"
+                                                           OnClick="@(() => RunProject(project, "Stopped", () => Compose.StopAsync(project)))" />
+                                        </MudTooltip>
+                                    }
+                                    else
+                                    {
+                                        <MudTooltip Text="Start">
+                                            <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small" Color="Color.Success"
+                                                           aria-label="@($"Start {project.Name}")"
+                                                           Disabled="@(_projectBusy is not null)"
+                                                           OnClick="@(() => RunProject(project, "Started", () => Compose.UpAsync(project)))" />
+                                        </MudTooltip>
+                                    }
+
+                                    <MudTooltip Text="Down — stop and remove containers and networks">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                                       aria-label="@($"Take {project.Name} down")"
+                                                       Disabled="@(_projectBusy is not null)"
+                                                       OnClick="@(() => DownProject(project))" />
+                                    </MudTooltip>
+                                </div>
+                            }
+                        </div>
+
+                        @if (project.Services.Length == 0)
+                        {
+                            <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                                Defined but not created. Start it to bring its services up.
+                            </MudText>
+                        }
+                        else
+                        {
+                            <MudSimpleTable Dense="true" Hover="true" Elevation="0" Class="dk-table">
+                                <thead>
+                                    <tr>
+                                        <th>Service</th>
+                                        <th>Image</th>
+                                        <th>Containers</th>
+                                        <th>Ports</th>
+                                        <th class="dk-actions">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var service in project.Services)
+                                    {
+                                        var first = service.Containers.FirstOrDefault();
+
+                                        <tr>
+                                            <td><b>@service.Name</b></td>
+                                            <td class="mud-text-secondary">@service.Image</td>
+                                            <td>
+                                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                                         Color="@(service.RunningCount == service.Containers.Length ? Color.Success : Color.Warning)"
+                                                         Class="dk-chip">
+                                                    @service.RunningCount / @service.Containers.Length running
+                                                </MudChip>
+                                            </td>
+                                            <td class="dk-ports">
+                                                @if (first is null || first.Ports.Length == 0)
+                                                {
+                                                    <span class="mud-text-secondary">—</span>
+                                                }
+                                                else
+                                                {
+                                                    @foreach (var port in first.Ports)
+                                                    {
+                                                        @if (first.IsRunning && IsLinkable(port))
+                                                        {
+                                                            <a class="dk-port" href="@PortUrl(port)" target="_blank" rel="noopener">
+                                                                @port.HostPort<span class="mud-text-secondary">:@port.ContainerPort</span>
+                                                            </a>
+                                                        }
+                                                        else
+                                                        {
+                                                            <span class="dk-port dk-port-plain">
+                                                                @port.HostPort<span class="mud-text-secondary">:@port.ContainerPort</span>
+                                                            </span>
+                                                        }
+                                                    }
+                                                }
+                                            </td>
+                                            <td class="dk-actions">
+                                                @if (first is not null)
+                                                {
+                                                    <MudTooltip Text="Logs">
+                                                        <MudIconButton Icon="@Icons.Material.Filled.Article" Size="Size.Small"
+                                                                       OnClick="@(() => ShowLogs(first))" />
+                                                    </MudTooltip>
+                                                }
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </MudSimpleTable>
+                        }
+                    </MudPaper>
+                }
+            }
+        </MudTabPanel>
+
         <MudTabPanel Text="@($"Containers ({_snapshot.Containers.Length})")" Icon="@Icons.Material.Filled.ViewInAr">
+            @if (Options.AllowCreate)
+            {
+                <div class="d-flex justify-end mb-3">
+                    <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Filled" Color="Color.Primary"
+                               Size="Size.Small" OnClick="NewContainer">
+                        New container
+                    </MudButton>
+                </div>
+            }
+
             @if (_snapshot.Containers.Length == 0)
             {
                 <MudText Typo="Typo.body2" Class="mud-text-secondary">No containers.</MudText>
@@ -233,6 +446,16 @@ else
         </MudTabPanel>
 
         <MudTabPanel Text="@($"Volumes ({_snapshot.Volumes.Length})")" Icon="@Icons.Material.Filled.Storage">
+            @if (Options.AllowCreate)
+            {
+                <div class="d-flex justify-end mb-3">
+                    <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Filled" Color="Color.Primary"
+                               Size="Size.Small" OnClick="@(() => NewVolumeOrNetwork(isNetwork: false))">
+                        New volume
+                    </MudButton>
+                </div>
+            }
+
             @if (_snapshot.Volumes.Length == 0)
             {
                 <MudText Typo="Typo.body2" Class="mud-text-secondary">No volumes.</MudText>
@@ -289,6 +512,16 @@ else
         </MudTabPanel>
 
         <MudTabPanel Text="@($"Networks ({_snapshot.Networks.Length})")" Icon="@Icons.Material.Filled.Hub">
+            @if (Options.AllowCreate)
+            {
+                <div class="d-flex justify-end mb-3">
+                    <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Filled" Color="Color.Primary"
+                               Size="Size.Small" OnClick="@(() => NewVolumeOrNetwork(isNetwork: true))">
+                        New network
+                    </MudButton>
+                </div>
+            }
+
             <MudSimpleTable Dense="true" Hover="true" Elevation="0" Class="dk-table">
                 <thead>
                     <tr>
@@ -338,15 +571,163 @@ else
 @code {
     private IDisposable? _subscription;
     private DockerSnapshot? _snapshot;
+    private bool _composeAvailable;
 
     // Ids with an action in flight. A second click before the poller catches up would issue a
     // duplicate command against a container that is already changing.
     private readonly HashSet<string> _busy = [];
 
-    protected override void OnInitialized()
+    // Compose operations take minutes and act on a whole project, so one at a time: `up` and
+    // `down` racing on the same project would fight over the same containers.
+    private string? _projectBusy;
+
+    protected override async Task OnInitializedAsync()
     {
         _snapshot = Poller.Latest;
         _subscription = EventBus.Subscribe<DockerSnapshot>(OnSnapshot);
+        _composeAvailable = await Compose.IsAvailableAsync();
+    }
+
+    private static Color ProjectColor(ComposeProject project) => project.Status switch
+    {
+        ComposeProjectStatus.Running => Color.Success,
+        ComposeProjectStatus.Partial => Color.Warning,
+        ComposeProjectStatus.Stopped => Color.Default,
+        _ => Color.Default,
+    };
+
+    private static string ProjectLabel(ComposeProject project) => project.Status switch
+    {
+        ComposeProjectStatus.Running => $"running ({project.RunningCount})",
+        ComposeProjectStatus.Partial => $"partial ({project.RunningCount}/{project.ContainerCount})",
+        ComposeProjectStatus.Stopped => "stopped",
+        _ => "not created",
+    };
+
+    /// <summary>
+    /// Runs a compose operation. Kept separate from the container-level Run: these take minutes,
+    /// so the project shows a spinner and every button on the page is disabled meanwhile.
+    /// </summary>
+    private async Task RunProject(ComposeProject project, string pastTense, Func<Task<DockerActionResult>> action)
+    {
+        _projectBusy = project.Name;
+
+        try
+        {
+            var result = await action();
+
+            Snackbar.Add(
+                result.Succeeded ? $"{pastTense} {project.Name}." : result.Message,
+                result.Succeeded ? Severity.Success : Severity.Error,
+                config => config.VisibleStateDuration = result.Succeeded ? 4000 : 15000);
+        }
+        finally
+        {
+            _projectBusy = null;
+        }
+    }
+
+    private async Task DownProject(ComposeProject project)
+    {
+        if (!await Confirm(
+            $"Take '{project.Name}' down?",
+            "Its containers and networks are stopped and removed. Named volumes and their data are kept.",
+            "Down"))
+        {
+            return;
+        }
+
+        await RunProject(project, "Took down", () => Compose.DownAsync(project));
+    }
+
+    private async Task NewProject()
+    {
+        var dialog = await DialogService.ShowAsync<ComposeEditorDialog>(
+            "New compose project",
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+        var result = await dialog.Result;
+
+        if (result is not { Canceled: false, Data: string name })
+        {
+            return;
+        }
+
+        // The file is written but nothing is running yet; bring it up so "Create and start" means
+        // what it says. Discovery only finds it on the next poll, so build the project here.
+        var created = new ComposeProject
+        {
+            Name = name,
+            WorkingDirectory = Compose.DirectoryFor(name),
+            ConfigFiles = [Compose.ComposeFileFor(name)],
+            IsManaged = true,
+        };
+
+        await RunProject(created, "Created and started", () => Compose.UpAsync(created));
+    }
+
+    private async Task EditProject(ComposeProject project)
+    {
+        var yaml = await Compose.ReadConfigFileAsync(project);
+
+        if (yaml is null)
+        {
+            Snackbar.Add($"Could not read the compose file for {project.Name}.", Severity.Error);
+
+            return;
+        }
+
+        var parameters = new DialogParameters<ComposeEditorDialog>
+        {
+            { x => x.ProjectName, project.Name },
+            { x => x.Yaml, yaml },
+        };
+
+        var dialog = await DialogService.ShowAsync<ComposeEditorDialog>(
+            $"Edit {project.Name}",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+        if (await dialog.Result is not { Canceled: false })
+        {
+            return;
+        }
+
+        // Saving only writes the file; `up` is what makes the change real.
+        await RunProject(project, "Applied", () => Compose.UpAsync(project));
+    }
+
+    private async Task NewContainer()
+    {
+        var parameters = new DialogParameters<CreateContainerDialog>
+        {
+            { x => x.Networks, _snapshot?.Networks.Select(n => n.Name).ToList() ?? [] },
+        };
+
+        var dialog = await DialogService.ShowAsync<CreateContainerDialog>(
+            "New container",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+        if (await dialog.Result is { Canceled: false, Data: string name })
+        {
+            Snackbar.Add($"Created {name}.", Severity.Success);
+            await RefreshAsync();
+        }
+    }
+
+    private async Task NewVolumeOrNetwork(bool isNetwork)
+    {
+        var parameters = new DialogParameters<CreateVolumeDialog> { { x => x.IsNetwork, isNetwork } };
+
+        var dialog = await DialogService.ShowAsync<CreateVolumeDialog>(
+            isNetwork ? "New network" : "New volume",
+            parameters);
+
+        if (await dialog.Result is { Canceled: false, Data: string name })
+        {
+            Snackbar.Add($"Created {name}.", Severity.Success);
+        }
     }
 
     private Task OnSnapshot(DockerSnapshot snapshot, CancellationToken cancellationToken)

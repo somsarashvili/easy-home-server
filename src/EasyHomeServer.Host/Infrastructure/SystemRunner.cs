@@ -17,13 +17,21 @@ internal sealed class SystemRunner(ILogger<SystemRunner> logger) : ISystemRunner
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
 
+    public Task<ProcessResult> RunAsync(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken = default) =>
+        RunAsync(fileName, arguments, DefaultTimeout, cancellationToken);
+
     public async Task<ProcessResult> RunAsync(
         string fileName,
         IReadOnlyList<string> arguments,
+        TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
         ArgumentNullException.ThrowIfNull(arguments);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
 
         var startInfo = new ProcessStartInfo
         {
@@ -77,7 +85,7 @@ internal sealed class SystemRunner(ILogger<SystemRunner> logger) : ISystemRunner
         process.BeginErrorReadLine();
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(DefaultTimeout);
+        timeoutCts.CancelAfter(timeout);
 
         try
         {
@@ -88,7 +96,7 @@ internal sealed class SystemRunner(ILogger<SystemRunner> logger) : ISystemRunner
             TryKill(process, fileName);
 
             throw new SystemOperationException(
-                $"'{fileName}' did not exit within {DefaultTimeout.TotalSeconds:0} seconds and was terminated.");
+                $"'{fileName}' did not exit within {timeout.TotalSeconds:0} seconds and was terminated.");
         }
         catch (OperationCanceledException)
         {

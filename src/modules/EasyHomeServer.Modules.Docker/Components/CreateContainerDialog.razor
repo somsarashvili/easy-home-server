@@ -1,0 +1,137 @@
+@inject DockerCli Cli
+
+@* Free-text fields in docker run's own syntax. Anyone creating a container already knows it, and
+   a grid of host/container/protocol dropdowns per port would be slower and need the same
+   validation anyway. Values are validated before running so the operator gets a message next to
+   the field rather than a wall of stderr. *@
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center">
+            <MudIcon Icon="@Icons.Material.Filled.AddBox" Class="mr-2" />
+            <MudText Typo="Typo.h6">New container</MudText>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <MudGrid>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_spec.Image" Label="Image" Placeholder="nginx:alpine" Immediate="true"
+                              HelperText="Pulled automatically if not present." />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_spec.Name" Label="Name" Placeholder="web" Immediate="true"
+                              HelperText="How you will refer to it afterwards." />
+            </MudItem>
+
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_spec.Ports" Label="Ports" Lines="3" Variant="Variant.Outlined"
+                              Placeholder="8080:80&#10;8443:443/tcp"
+                              HelperText="One per line, host:container." />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_spec.Volumes" Label="Volumes" Lines="3" Variant="Variant.Outlined"
+                              Placeholder="mydata:/data&#10;/srv/media:/media:ro"
+                              HelperText="One per line, source:/target[:ro]." />
+            </MudItem>
+
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_spec.Environment" Label="Environment" Lines="3" Variant="Variant.Outlined"
+                              Placeholder="TZ=Europe/London&#10;PUID=1000"
+                              HelperText="One per line, KEY=value." />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_spec.Labels" Label="Labels" Lines="3" Variant="Variant.Outlined"
+                              Placeholder="easyhomeserver.avahi.enable=true"
+                              HelperText="One per line, key=value." />
+            </MudItem>
+
+            <MudItem xs="12" sm="4">
+                <MudSelect @bind-Value="_spec.RestartPolicy" Label="Restart policy">
+                    <MudSelectItem Value="@("unless-stopped")">unless-stopped</MudSelectItem>
+                    <MudSelectItem Value="@("always")">always</MudSelectItem>
+                    <MudSelectItem Value="@("on-failure")">on-failure</MudSelectItem>
+                    <MudSelectItem Value="@("no")">no</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="4">
+                <MudSelect @bind-Value="_spec.Network" Label="Network" Clearable="true">
+                    <MudSelectItem Value="@("")">(default bridge)</MudSelectItem>
+                    @foreach (var network in Networks)
+                    {
+                        <MudSelectItem Value="@network">@network</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="4">
+                <MudTextField @bind-Value="_spec.Command" Label="Command" Placeholder="(image default)"
+                              HelperText="Split on spaces; quoting is not handled." />
+            </MudItem>
+        </MudGrid>
+
+        @if (_error is not null)
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mt-4">@_error</MudAlert>
+        }
+
+        @if (_busy)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="mt-4" />
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                Creating. This pulls the image if it is not already here, which can take a while.
+            </MudText>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())" Disabled="_busy">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="CreateAsync" Disabled="_busy">
+            Create and start
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance Dialog { get; set; } = default!;
+
+    /// <summary>Networks offered in the dropdown, so the operator need not remember their names.</summary>
+    [Parameter]
+    public IReadOnlyList<string> Networks { get; set; } = [];
+
+    private readonly ContainerSpec _spec = new();
+    private string? _error;
+    private bool _busy;
+
+    private async Task CreateAsync()
+    {
+        // Checked here first so the message names the offending field, rather than surfacing
+        // docker's own error after a failed run.
+        _error = _spec.Validate();
+
+        if (_error is not null)
+        {
+            return;
+        }
+
+        _busy = true;
+
+        try
+        {
+            var result = await Cli.CreateContainerAsync(_spec);
+
+            if (!result.Succeeded)
+            {
+                _error = result.Message;
+
+                return;
+            }
+
+            Dialog.Close(DialogResult.Ok(_spec.Name));
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

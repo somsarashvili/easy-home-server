@@ -33,6 +33,8 @@ public sealed class DockerModule : IModule
 
         services.AddSingleton(options);
         services.AddSingleton<DockerCli>();
+        services.AddSingleton<ComposeCli>();
+        services.AddSingleton<ComposeDiscovery>();
 
         // Singleton: the poller holds the previous poll's containers to diff against, and the
         // latest snapshot that pages render on first load.
