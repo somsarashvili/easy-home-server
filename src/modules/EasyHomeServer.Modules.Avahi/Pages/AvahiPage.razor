@@ -1,0 +1,279 @@
+@page "/avahi"
+@attribute [Authorize]
+@implements IDisposable
+
+@inject IEventBus EventBus
+@inject AdvertisementReconciler Reconciler
+@inject AvahiBrowser Browser
+@inject AvahiOptions Options
+@inject ISnackbar Snackbar
+
+<link rel="stylesheet" href="_content/EasyHomeServer.Modules.Avahi/avahi.css" />
+
+<PageTitle>Network Discovery</PageTitle>
+
+<div class="d-flex align-center justify-space-between mb-6">
+    <div>
+        <MudText Typo="Typo.h4">Network Discovery</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            @* Parenthesised: Razor would otherwise read ".local" as member access on the string. *@
+            Advertises services over mDNS so they are reachable at <code>@(_hostName).local</code> without an IP.
+        </MudText>
+    </div>
+</div>
+
+@if (!_availability.IsAvailable)
+{
+    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined">
+        <MudText Typo="Typo.subtitle2">Avahi is unavailable</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mt-1">@_availability.Reason</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mt-2">
+            Service files are still written; nothing is published until the daemon runs.
+        </MudText>
+    </MudAlert>
+}
+
+<MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" Class="av-tabs mt-4">
+
+    <MudTabPanel Text="@($"Advertised ({Reconciler.Advertised.Length})")" Icon="@Icons.Material.Filled.Campaign">
+        @if (Reconciler.Advertised.Length == 0)
+        {
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">Nothing is being advertised.</MudText>
+        }
+        else
+        {
+            <MudSimpleTable Dense="true" Hover="true" Elevation="0" Class="av-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Type</th>
+                        <th class="av-numeric">Port</th>
+                        <th>Source</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var service in Reconciler.Advertised)
+                    {
+                        <tr>
+                            @* %h is substituted by avahi at publish time; showing the raw string
+                               would be confusing, so it is rendered as the real hostname. *@
+                            <td><b>@service.DisplayName.Replace("%h", _hostName)</b></td>
+                            <td class="mud-text-secondary av-mono">@service.ServiceType</td>
+                            <td class="av-numeric">@service.Port</td>
+                            <td>
+                                @if (service.Origin == ServiceOrigin.Host)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info" Class="av-chip">
+                                        this server
+                                    </MudChip>
+                                }
+                                else
+                                {
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default" Class="av-chip">
+                                        @service.ContainerName
+                                    </MudChip>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+    </MudTabPanel>
+
+    <MudTabPanel Text="Containers" Icon="@Icons.Material.Filled.ViewInAr">
+        @if (!Options.AdvertiseContainers)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
+                Container advertising is switched off in configuration
+                (<code>Modules:avahi:AdvertiseContainers</code>).
+            </MudAlert>
+        }
+        else if (!Reconciler.HasDockerSource)
+        {
+            @* Not an error. This module subscribes to a contract, not to the Docker module, and
+               runs perfectly well on a machine that has no Docker module installed. *@
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
+                <MudText Typo="Typo.subtitle2">No container source</MudText>
+                <MudText Typo="Typo.body2" Class="mud-text-secondary mt-1">
+                    Nothing is publishing container information. Install the Docker module to advertise
+                    containers; this module works without it and will advertise the server itself.
+                </MudText>
+            </MudAlert>
+        }
+        else
+        {
+            <MudText Typo="Typo.body2" Class="mud-text-secondary mb-4">
+                Advertising is opt-in: mDNS is a broadcast, so a container is announced to the whole
+                network only when it asks to be. Add <code>@ContainerServiceMapper.EnableLabel=true</code>
+                to a container's labels.
+            </MudText>
+
+            <MudSimpleTable Dense="true" Hover="true" Elevation="0" Class="av-table">
+                <thead>
+                    <tr>
+                        <th>Container</th>
+                        <th>Advertised as</th>
+                        <th class="av-numeric">Port</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var mapping in Reconciler.Mappings)
+                    {
+                        <tr class="@(mapping.Service is null ? "av-muted" : "")">
+                            <td><b>@mapping.ContainerName</b></td>
+                            <td class="mud-text-secondary">
+                                @(mapping.Service is { } s ? s.DisplayName.Replace("%h", _hostName) : "—")
+                            </td>
+                            <td class="av-numeric">@(mapping.Service?.Port.ToString() ?? "—")</td>
+                            <td>
+                                @if (mapping.Service is not null)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled" Class="av-chip">
+                                        advertised
+                                    </MudChip>
+                                }
+                                else
+                                {
+                                    <MudTooltip Text="@mapping.SkipReason">
+                                        <MudChip T="string" Size="Size.Small" Color="@(mapping.IsOptedIn ? Color.Warning : Color.Default)"
+                                                 Variant="Variant.Outlined" Class="av-chip">
+                                            @(mapping.IsOptedIn ? "not advertised" : "not opted in")
+                                        </MudChip>
+                                    </MudTooltip>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+
+            <MudExpansionPanels Elevation="0" Class="mt-4">
+                <MudExpansionPanel Text="How to advertise a container">
+                    <pre class="av-code">services:
+  jellyfin:
+    image: jellyfin/jellyfin
+    ports:
+      - "8096:8096"
+    labels:
+      @ContainerServiceMapper.EnableLabel: "true"
+      @ContainerServiceMapper.NameLabel: "Jellyfin on %h"     # optional, defaults to the container name
+      @ContainerServiceMapper.TypeLabel: "_http._tcp"         # optional, this is the default
+      @ContainerServiceMapper.PortLabel: "8096"               # optional, needed only with several ports
+      @ContainerServiceMapper.PathLabel: "/web"               # optional, published as a TXT record</pre>
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                        Labels are set at creation time, so a running container has to be recreated to pick
+                        them up. <code>%h</code> is replaced with the hostname by avahi.
+                    </MudText>
+                </MudExpansionPanel>
+            </MudExpansionPanels>
+        }
+    </MudTabPanel>
+
+    <MudTabPanel Text="On the network" Icon="@Icons.Material.Filled.Search">
+        <div class="d-flex align-center justify-space-between mb-3">
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                What a machine on this LAN sees right now — the only real proof an advertisement works.
+            </MudText>
+            <MudButton StartIcon="@Icons.Material.Filled.Refresh" Variant="Variant.Outlined" Size="Size.Small"
+                       Disabled="_browsing" OnClick="BrowseAsync">
+                Scan
+            </MudButton>
+        </div>
+
+        @if (_browsing)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="my-2" />
+        }
+
+        @if (_discovered.Length == 0 && !_browsing)
+        {
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                @(_hasBrowsed ? "Nothing found on the network." : "Press Scan to browse the network.")
+            </MudText>
+        }
+        else
+        {
+            <MudSimpleTable Dense="true" Hover="true" Elevation="0" Class="av-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Type</th>
+                        <th>Host</th>
+                        <th>Address</th>
+                        <th class="av-numeric">Port</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var service in _discovered)
+                    {
+                        <tr>
+                            <td>
+                                <b>@service.Name</b>
+                                @if (service.IsLocal(_hostName))
+                                {
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info" Class="ml-2 av-chip">
+                                        this server
+                                    </MudChip>
+                                }
+                            </td>
+                            <td class="mud-text-secondary av-mono">@service.ServiceType</td>
+                            <td class="mud-text-secondary">@service.HostName</td>
+                            <td class="mud-text-secondary av-mono">@service.Address</td>
+                            <td class="av-numeric">@service.Port</td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+    </MudTabPanel>
+
+</MudTabs>
+
+@code {
+    private IDisposable? _subscription;
+    private AvahiBrowser.Availability _availability = new() { IsAvailable = true };
+    private ImmutableArray<DiscoveredService> _discovered = [];
+    private bool _browsing;
+    private bool _hasBrowsed;
+    private readonly string _hostName = Environment.MachineName;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _availability = await Browser.ProbeAsync();
+
+        // Re-render as containers come and go: the reconciler updates its mappings from the same
+        // inventory, so this page follows without polling anything itself.
+        _subscription = EventBus.Subscribe<ContainerInventory>((_, _) => InvokeAsync(StateHasChanged));
+    }
+
+    private async Task BrowseAsync()
+    {
+        _browsing = true;
+
+        try
+        {
+            _discovered = await Browser.BrowseAsync();
+            _hasBrowsed = true;
+
+            if (_discovered.Length == 0)
+            {
+                Snackbar.Add("Nothing responded on the network.", Severity.Info);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Could not browse: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _browsing = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        _subscription?.Dispose();
+    }
+}

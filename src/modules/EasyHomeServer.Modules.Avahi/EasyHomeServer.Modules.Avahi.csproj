@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <RootNamespace>EasyHomeServer.Modules.Avahi</RootNamespace>
+    <AssemblyName>EasyHomeServer.Modules.Avahi</AssemblyName>
+    <Version>$(EasyHomeServerVersion)</Version>
+    <GenerateEmbeddedFilesManifest>true</GenerateEmbeddedFilesManifest>
+    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Remove="wwwroot\**" />
+    <EmbeddedResource Include="wwwroot\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../EasyHomeServer.Sdk/EasyHomeServer.Sdk.csproj"
+                      Private="false"
+                      ExcludeAssets="runtime" />
+    <!--
+      The Docker *contract*, not the Docker module: this module subscribes to container events
+      but does not depend on anything that manages Docker. On a machine with no Docker module
+      installed it loads and runs, and simply never receives an inventory.
+
+      Private="false" is what makes the subscription work at all — the host loads this assembly
+      into its default context so the type here is the same type the publisher publishes.
+    -->
+    <ProjectReference Include="../../contracts/EasyHomeServer.Contracts.Docker/EasyHomeServer.Contracts.Docker.csproj"
+                      Private="false"
+                      ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MudBlazor" Version="9.7.0" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" Version="10.0.10"
+                      ExcludeAssets="runtime"
+                      PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

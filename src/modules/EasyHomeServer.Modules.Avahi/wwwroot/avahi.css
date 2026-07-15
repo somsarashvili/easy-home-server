@@ -1,0 +1,43 @@
+/*
+ * Served from inside the module assembly at /_content/EasyHomeServer.Modules.Avahi/avahi.css.
+ */
+
+.av-tabs .mud-tabs-panels {
+    padding-top: 1.5rem;
+}
+
+.av-table {
+    overflow-x: auto;
+}
+
+.av-mono {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.8rem;
+}
+
+.av-numeric {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.av-chip {
+    height: 20px;
+}
+
+/* Containers that are not advertised are listed for context, not attention. */
+.av-muted td {
+    opacity: 0.65;
+}
+
+.av-code {
+    margin: 0 0 0.75rem;
+    padding: 1rem;
+    overflow-x: auto;
+    border-radius: 6px;
+    background: var(--mud-palette-background-gray);
+    color: var(--mud-palette-text-primary);
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+    line-height: 1.6;
+}

@@ -9,5 +9,6 @@
   <Folder Name="/src/modules/">
     <Project Path="src/modules/EasyHomeServer.Modules.SystemInfo/EasyHomeServer.Modules.SystemInfo.csproj" />
     <Project Path="src/modules/EasyHomeServer.Modules.Docker/EasyHomeServer.Modules.Docker.csproj" />
+    <Project Path="src/modules/EasyHomeServer.Modules.Avahi/EasyHomeServer.Modules.Avahi.csproj" />
   </Folder>
 </Solution>
