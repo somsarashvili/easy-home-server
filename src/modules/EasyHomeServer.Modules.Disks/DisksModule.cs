@@ -1,4 +1,5 @@
 using EasyHomeServer.Modules.Disks.Disks;
+using EasyHomeServer.Modules.Disks.MergerFs;
 using EasyHomeServer.Sdk;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -31,6 +32,7 @@ public sealed class DisksModule : IModule
         services.AddSingleton<SmartReader>();
         services.AddSingleton<MountManager>();
         services.AddSingleton<DiskFormatter>();
+        services.AddSingleton<MergerFsReader>();
 
         services.AddModuleWorker<DiskPoller>();
     }

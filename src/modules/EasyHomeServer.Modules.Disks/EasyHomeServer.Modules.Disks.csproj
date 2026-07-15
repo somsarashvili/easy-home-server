@@ -6,6 +6,8 @@
     <Version>$(EasyHomeServerVersion)</Version>
     <GenerateEmbeddedFilesManifest>true</GenerateEmbeddedFilesManifest>
     <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
+    <!-- LibraryImport's generated marshalling code is unsafe. Needed for getxattr, in Xattr.cs. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

@@ -43,8 +43,10 @@ else if (_snapshot is null)
 }
 else
 {
-    @foreach (var disk in _snapshot.Disks)
-    {
+    <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" Class="mb-4">
+        <MudTabPanel Text="Disks" Icon="@Icons.Material.Filled.Storage">
+            @foreach (var disk in _snapshot.Disks)
+            {
         <MudPaper Class="pa-4 mb-4" Elevation="0">
             <div class="d-flex align-center justify-space-between mb-1">
                 <div>
@@ -239,7 +241,15 @@ else
                 </MudSimpleTable>
             }
         </MudPaper>
-    }
+            }
+        </MudTabPanel>
+
+        <MudTabPanel Text="Pools" Icon="@Icons.Material.Filled.Layers"
+                     BadgeData="@(_snapshot.Pools.Length > 0 ? _snapshot.Pools.Length : null)"
+                     BadgeColor="Color.Default">
+            <PoolsPanel Snapshot="_snapshot" />
+        </MudTabPanel>
+    </MudTabs>
 
     <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-4">
         Read every @Options.PollIntervalSeconds.ToString("0.#")s &middot; last at

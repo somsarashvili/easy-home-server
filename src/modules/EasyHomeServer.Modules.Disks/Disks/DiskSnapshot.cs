@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using EasyHomeServer.Modules.Disks.MergerFs;
 
 namespace EasyHomeServer.Modules.Disks.Disks;
 
@@ -10,6 +11,9 @@ public sealed record DiskSnapshot
 
     /// <summary>Every block device, as a tree of disks and their partitions.</summary>
     public ImmutableArray<BlockDevice> Devices { get; init; } = [];
+
+    /// <summary>The mergerfs pools on the machine, if any.</summary>
+    public ImmutableArray<MergerFsPool> Pools { get; init; } = [];
 
     /// <summary>
     /// Whole disks worth showing.
@@ -27,4 +31,15 @@ public sealed record DiskSnapshot
 
     /// <summary>Disks with no partition table and no filesystem — ready to be prepared.</summary>
     public IEnumerable<BlockDevice> BlankDisks => Disks.Where(d => d.IsBlank);
+
+    /// <summary>
+    /// The pool a mounted filesystem is a branch of, or null when it is not in one.
+    /// </summary>
+    /// <remarks>
+    /// So the disk list can say a disk is part of a pool. Without it, the honest-looking reading
+    /// of a pooled server is a set of unrelated disks, which is exactly backwards.
+    /// </remarks>
+    public MergerFsPool? PoolContaining(string mountPoint) =>
+        Pools.FirstOrDefault(pool => pool.Branches.Any(branch =>
+            string.Equals(branch.Path, mountPoint, StringComparison.Ordinal)));
 }

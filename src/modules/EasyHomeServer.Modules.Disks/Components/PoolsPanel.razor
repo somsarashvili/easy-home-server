@@ -1,0 +1,244 @@
+@using EasyHomeServer.Modules.Disks.MergerFs
+
+@* The mergerfs pools: what they present, and which disks are actually behind them. *@
+
+@if (Snapshot.Pools.Length == 0)
+{
+    <MudAlert Severity="Severity.Normal" Variant="Variant.Outlined" Class="mt-2">
+        <MudText Typo="Typo.subtitle2">No pools</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mt-1">
+            Nothing on this machine is mounted as <code>fuse.mergerfs</code>. A pool presents
+            several disks as one directory tree, so a share can outgrow any single disk.
+        </MudText>
+    </MudAlert>
+}
+
+@foreach (var pool in Snapshot.Pools)
+{
+    <MudPaper Class="pa-4 mb-4" Elevation="0">
+        <div class="d-flex align-center justify-space-between mb-1">
+            <div class="d-flex align-center">
+                <MudIcon Icon="@Icons.Material.Filled.Layers" Class="mr-2 mud-text-secondary" />
+                <MudText Typo="Typo.h6" Class="dsk-mono">@pool.MountPoint</MudText>
+                <MudText Typo="Typo.body2" Class="mud-text-secondary ml-3">
+                    @Format.Bytes(pool.TotalBytes) across
+                    @pool.Branches.Length branch@(pool.Branches.Length == 1 ? "" : "es")
+                </MudText>
+            </div>
+
+            <div class="d-flex align-center">
+                @if (pool.CreatePolicy is { } policy)
+                {
+                    <MudTooltip Text="@CreatePolicyDescription(policy)">
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                 Color="Color.Info" Class="dsk-chip">create=@policy</MudChip>
+                    </MudTooltip>
+                }
+
+                @if (pool.MinFreeSpaceBytes is { } minFree)
+                {
+                    <MudTooltip Text="@($"A branch with less than {Format.Bytes(minFree)} free is skipped when choosing where a new file goes.")">
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                 Color="Color.Default" Class="dsk-chip">min free @Format.Bytes(minFree)</MudChip>
+                    </MudTooltip>
+                }
+
+                @if (pool.MoveOnEnoSpc is { } move)
+                {
+                    <MudTooltip Text="@($"If a branch fills mid-write, the file is moved to another chosen by the {move} policy.")">
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                 Color="Color.Default" Class="dsk-chip">moveonenospc=@move</MudChip>
+                    </MudTooltip>
+                }
+
+                @if (pool.Version is { } version)
+                {
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
+                             Color="Color.Default" Class="dsk-chip">v@version</MudChip>
+                }
+            </div>
+        </div>
+
+        <MudProgressLinear Color="@UsageColor(pool.UsedFraction * 100)" Rounded="true" Size="Size.Small"
+                           Value="@(pool.UsedFraction * 100)" Class="my-2" />
+
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3">
+            @Format.Bytes(pool.UsedBytes) used &middot; @Format.Bytes(pool.AvailableBytes) free
+            &middot; @Format.Percent(pool.UsedFraction * 100)
+        </MudText>
+
+        @if (!pool.AcceptsNewFiles && pool.Branches.Any(b => b.IsPresent))
+        {
+            @*
+                The failure this panel exists to catch. Every branch is below minfreespace, so
+                creating a file fails with ENOSPC — while the bar above still shows free space,
+                because that space is real. Nothing else on this page would explain it.
+            *@
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                <MudText Typo="Typo.subtitle2">This pool cannot accept new files</MudText>
+                <MudText Typo="Typo.body2" Class="mt-1">
+                    No branch has the @Format.Bytes(pool.MinFreeSpaceBytes) of free space that
+                    <code>minfreespace</code> requires, so mergerfs fails new files with
+                    <code>ENOSPC</code> even though @Format.Bytes(pool.AvailableBytes) is free.
+                    Free space on a branch, add one, or lower <code>minfreespace</code>.
+                </MudText>
+            </MudAlert>
+        }
+
+        @if (!pool.ConfigReadFromRuntime)
+        {
+            @* The pool is real, but its details were inferred. Say so rather than present a guess as fact. *@
+            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                This mergerfs did not answer on its control file, so its branches were read from the
+                mount source and its policies are unknown.
+            </MudAlert>
+        }
+
+        @if (pool.MissingBranches.Any())
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                @{
+                    var missing = pool.MissingBranches.Count();
+                }
+                @missing branch@(missing == 1 ? " is" : "es are") listed but unreadable. The pool is
+                still serving what remains, so this is easy to miss.
+            </MudAlert>
+        }
+
+        <MudSimpleTable Dense="true" Hover="true" Elevation="0" Class="dsk-table">
+            <thead>
+            <tr>
+                <th>Branch</th>
+                <th>Disk</th>
+                <th>Mode</th>
+                <th class="dsk-numeric">Size</th>
+                <th class="dsk-numeric">Used</th>
+                <th style="width: 30%;">Usage</th>
+            </tr>
+            </thead>
+            <tbody>
+            @foreach (var branch in pool.Branches)
+            {
+                <tr>
+                    <td class="dsk-mono">
+                        @branch.Path
+                        @if (IsNextWriteTarget(pool, branch))
+                        {
+                            @* Where the next new file lands, which is not obvious from any column here. *@
+                            <MudTooltip Text="@($"The {pool.CreatePolicy} policy would put the next new file here.")">
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                         Color="Color.Primary" Class="ml-2 dsk-chip">new writes</MudChip>
+                            </MudTooltip>
+                        }
+
+                        @if (IsBelowMinFree(pool, branch))
+                        {
+                            <MudTooltip Text="@($"Below minfreespace ({Format.Bytes(pool.MinFreeSpaceBytes)}), so mergerfs will not put new files here. Existing files are still readable and writable.")">
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                         Color="Color.Warning" Class="ml-2 dsk-chip">below min free</MudChip>
+                            </MudTooltip>
+                        }
+                    </td>
+                    <td class="dsk-mono mud-text-secondary">@(DeviceFor(branch.Path) ?? "—")</td>
+                    <td>
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
+                                 Color="@ModeColor(branch.Mode)" Class="dsk-chip">@ModeLabel(branch.Mode)</MudChip>
+                    </td>
+                    <td class="dsk-numeric">@Format.Bytes(branch.TotalBytes)</td>
+                    <td class="dsk-numeric">@Format.Bytes(branch.UsedBytes)</td>
+                    <td>
+                        @if (branch.UsedFraction is { } fraction)
+                        {
+                            <div class="d-flex align-center">
+                                <MudProgressLinear Color="@UsageColor(fraction * 100)" Rounded="true"
+                                                   Size="Size.Small" Value="@(fraction * 100)"
+                                                   Class="mud-width-full mr-2" />
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary dsk-numeric">
+                                    @Format.Percent(fraction * 100)
+                                </MudText>
+                            </div>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Error">not readable</MudText>
+                        }
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </MudSimpleTable>
+    </MudPaper>
+}
+
+@code {
+    /// <summary>The reading to render. Pools and the disks behind them come from the same one.</summary>
+    [Parameter]
+    [EditorRequired]
+    public required DiskSnapshot Snapshot { get; set; }
+
+    private static Color UsageColor(double percent) => percent switch
+    {
+        >= 90 => Color.Error,
+        >= 75 => Color.Warning,
+        _ => Color.Primary,
+    };
+
+    /// <summary>
+    /// The device behind a branch, e.g. <c>/mnt/data1</c> is <c>vdd</c>.
+    /// </summary>
+    /// <remarks>
+    /// A branch is a path; what someone wants to know when a branch fills is which disk to
+    /// replace. Matched against the same reading the disk list uses, so the two cannot disagree.
+    /// </remarks>
+    private string? DeviceFor(string branchPath) =>
+        Snapshot.Devices
+            .SelectMany(Flatten)
+            .FirstOrDefault(device => device.MountPoints.Contains(branchPath))
+            ?.Name;
+
+    private static IEnumerable<BlockDevice> Flatten(BlockDevice device) =>
+        new[] { device }.Concat(device.Children.SelectMany(Flatten));
+
+    /// <summary>Whether the next new file would land on this branch.</summary>
+    private static bool IsNextWriteTarget(MergerFsPool pool, PoolBranch branch) =>
+        ReferenceEquals(pool.NextWriteTarget, branch);
+
+    /// <summary>
+    /// Whether a branch is skipped for new files because it is below <c>minfreespace</c>.
+    /// </summary>
+    /// <remarks>
+    /// Shown per branch because the space it still has makes it look available, and the reason it
+    /// is not is a number kept somewhere else entirely.
+    /// </remarks>
+    private static bool IsBelowMinFree(MergerFsPool pool, PoolBranch branch) =>
+        branch.IsPresent
+        && branch.Mode == BranchMode.ReadWrite
+        && pool.MinFreeSpaceBytes is { } minimum
+        && branch.AvailableBytes < minimum;
+
+    private static string ModeLabel(BranchMode mode) => mode switch
+    {
+        BranchMode.ReadWrite => "RW",
+        BranchMode.ReadOnly => "RO",
+        BranchMode.NoCreate => "NC",
+        _ => "?",
+    };
+
+    private static Color ModeColor(BranchMode mode) => mode switch
+    {
+        BranchMode.ReadWrite => Color.Success,
+        BranchMode.ReadOnly => Color.Warning,
+        BranchMode.NoCreate => Color.Info,
+        _ => Color.Default,
+    };
+
+    private static string CreatePolicyDescription(string policy) => policy.ToLowerInvariant() switch
+    {
+        "ff" => "First found: new files go to the first writable branch with room. Fills one disk before the next.",
+        "mfs" => "Most free space: new files go to whichever branch has the most room free.",
+        "lfs" => "Least free space: new files go to the fullest branch that still has room.",
+        "epmfs" => "Existing path, most free space: prefers a branch that already has the parent directory.",
+        "rand" => "Random: new files go to a randomly chosen writable branch.",
+        _ => $"mergerfs chooses a branch for new files using the {policy} policy.",
+    };
+}

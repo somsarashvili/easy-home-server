@@ -1,3 +1,4 @@
+using EasyHomeServer.Modules.Disks.MergerFs;
 using EasyHomeServer.Sdk;
 using Microsoft.Extensions.Logging;
 
@@ -14,6 +15,7 @@ namespace EasyHomeServer.Modules.Disks.Disks;
 public sealed class DiskPoller : ModuleBackgroundService
 {
     private readonly BlockDeviceReader _reader;
+    private readonly MergerFsReader _mergerFsReader;
     private readonly IEventBus _eventBus;
     private readonly TimeSpan _interval;
 
@@ -25,12 +27,14 @@ public sealed class DiskPoller : ModuleBackgroundService
 
     public DiskPoller(
         BlockDeviceReader reader,
+        MergerFsReader mergerFsReader,
         IEventBus eventBus,
         DisksOptions options,
         ILoggerFactory loggerFactory)
         : base(loggerFactory)
     {
         _reader = reader;
+        _mergerFsReader = mergerFsReader;
         _eventBus = eventBus;
         _interval = TimeSpan.FromSeconds(options.PollIntervalSeconds);
     }
@@ -67,7 +71,13 @@ public sealed class DiskPoller : ModuleBackgroundService
         {
             var devices = await _reader.ReadAsync(cancellationToken).ConfigureAwait(false);
 
-            var snapshot = new DiskSnapshot { TimestampUtc = DateTimeOffset.UtcNow, Devices = devices };
+            var snapshot = new DiskSnapshot
+            {
+                TimestampUtc = DateTimeOffset.UtcNow,
+                Devices = devices,
+                Pools = _mergerFsReader.Read(),
+            };
+
             Latest = snapshot;
 
             await _eventBus.PublishAsync(snapshot, cancellationToken).ConfigureAwait(false);
