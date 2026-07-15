@@ -4,6 +4,8 @@
 @inject ISnackbar Snackbar
 @inject DisksOptions Options
 @inject DiskPoller Poller
+@inject PoolManager PoolManager
+@inject SnapRaidConfigWriter ArrayWriter
 
 @* The mergerfs pools: what they present, and which disks are actually behind them. *@
 
@@ -72,6 +74,17 @@
                 {
                     <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
                              Color="Color.Default" Class="dsk-chip">v@version</MudChip>
+                }
+
+                @if (Options.AllowPoolControl)
+                {
+                    <MudTooltip Text="Remove this pool. No files are deleted.">
+                        <MudIconButton Icon="@Icons.Material.Filled.LinkOff" Size="Size.Small"
+                                       Color="Color.Default"
+                                       aria-label="@($"Remove pool {pool.MountPoint}")"
+                                       Disabled="_busy"
+                                       OnClick="@(() => RemovePoolAsync(pool))" />
+                    </MudTooltip>
                 }
             </div>
         </div>
@@ -225,6 +238,42 @@
             }),
     ];
 
+    private async Task RemovePoolAsync(MergerFsPool pool)
+    {
+        var parameters = new DialogParameters<RemovePoolDialog>
+        {
+            { dialog => dialog.Pool, pool },
+            { dialog => dialog.HasArray, ArrayWriter.ConfigExists },
+            { dialog => dialog.Remove, mountPoint => PoolManager.RemoveAsync(mountPoint) },
+        };
+
+        var dialog = await DialogService.ShowAsync<RemovePoolDialog>("Remove pool", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: string message })
+        {
+            Snackbar.Add(message, Severity.Success);
+
+            await RefreshAsync();
+        }
+    }
+
+    private async Task RefreshAsync()
+    {
+        _busy = true;
+
+        try
+        {
+            await Poller.RefreshAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
     private async Task CreatePoolAsync()
     {
         var parameters = new DialogParameters<CreatePoolDialog>
@@ -242,17 +291,8 @@
         {
             Snackbar.Add(message, Severity.Success);
 
-            _busy = true;
-
-            try
-            {
-                // The pool exists now; re-read so the new mount shows without waiting for the tick.
-                await Poller.RefreshAsync();
-            }
-            finally
-            {
-                _busy = false;
-            }
+            // The pool exists now; re-read so the new mount shows without waiting for the tick.
+            await RefreshAsync();
         }
     }
 

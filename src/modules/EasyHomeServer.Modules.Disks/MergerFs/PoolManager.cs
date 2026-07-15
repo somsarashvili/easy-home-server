@@ -211,6 +211,90 @@ public sealed class PoolManager(ISystemRunner systemRunner, ILogger<PoolManager>
     }
 
     /// <summary>
+    /// Unmounts a pool and stops it coming back at boot.
+    /// </summary>
+    /// <remarks>
+    /// Keeps the unit as a <c>.bak</c> rather than deleting it. systemd ignores any suffix it does
+    /// not know, so the file stops being a unit the moment it is renamed, and a pool someone tuned
+    /// by hand can be put back by renaming it again. Deleting it would throw away the only record
+    /// of how the pool was built to save a file of a few hundred bytes.
+    /// </remarks>
+    public async Task<PoolResult> RemoveAsync(string mountPoint, CancellationToken cancellationToken = default)
+    {
+        var path = NormalisePath(mountPoint);
+
+        try
+        {
+            var unitName = await EscapePathAsync(path, cancellationToken).ConfigureAwait(false);
+
+            if (unitName is null)
+            {
+                return new PoolResult
+                {
+                    Succeeded = false,
+                    Message = "Could not work out the systemd unit name for that mount point.",
+                };
+            }
+
+            var stop = await systemRunner.SystemctlAsync(SystemctlAction.Stop, unitName, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!stop.Succeeded)
+            {
+                // Almost always something holding a file open under the pool.
+                return new PoolResult
+                {
+                    Succeeded = false,
+                    Message = $"Could not unmount {path}: {stop.StandardError.Trim()} "
+                              + "Something is probably still using it — a container, a share, or a shell.",
+                };
+            }
+
+            await systemRunner.SystemctlAsync(SystemctlAction.Disable, unitName, cancellationToken)
+                .ConfigureAwait(false);
+
+            var unitPath = Path.Combine(UnitDirectory, unitName);
+            var backupPath = unitPath + ".bak";
+
+            if (File.Exists(unitPath))
+            {
+                var moved = await systemRunner
+                    .RunAsync("mv", ["-f", unitPath, backupPath], cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (!moved.Succeeded)
+                {
+                    return new PoolResult
+                    {
+                        Succeeded = false,
+                        Message = $"Unmounted {path}, but could not move {unitPath} aside: "
+                                  + moved.StandardError.Trim(),
+                    };
+                }
+            }
+
+            await systemRunner.SystemctlAsync(SystemctlAction.DaemonReload, null, cancellationToken)
+                .ConfigureAwait(false);
+
+            logger.LogInformation("Removed pool {MountPoint}; unit kept at {BackupPath}.", path, backupPath);
+
+            return new PoolResult
+            {
+                Succeeded = true,
+                Message = $"Pool {path} removed. Every file is still on the branch that held it. "
+                          + $"The unit is kept at {backupPath}.",
+            };
+        }
+        catch (Exception ex) when (ex is SystemOperationException or IOException
+                                       or UnauthorizedAccessException)
+        {
+            logger.LogError(ex, "Could not remove the pool at {MountPoint}.", path);
+
+            return new PoolResult { Succeeded = false, Message = ex.Message };
+        }
+    }
+
+    /// <summary>
     /// The unit file's text.
     /// </summary>
     /// <remarks>

@@ -1,0 +1,118 @@
+@using EasyHomeServer.Modules.Disks.MergerFs
+
+@*
+    Confirms removing a pool. The work here is mostly reassurance: "remove" next to a list of disks
+    reads as "erase", and it is neither. What it actually costs is that one tree becomes several.
+*@
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body1">
+            Remove the pool at <code>@Pool.MountPoint</code>?
+        </MudText>
+
+        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mt-3">
+            No files are deleted and no disk is formatted. Each branch keeps everything it holds.
+        </MudAlert>
+
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mt-3">
+            What changes is where those files are reached. Anything written through
+            <code>@Pool.MountPoint</code> was spread across the branches by the create policy, so
+            afterwards it is still there, but under each branch's own path rather than one tree:
+        </MudText>
+
+        <div class="mt-2">
+            @foreach (var branch in Pool.Branches)
+            {
+                <MudText Typo="Typo.body2" Class="dsk-mono mud-text-secondary">
+                    @branch.Path
+                    @if (branch.UsedBytes is { } used)
+                    {
+                        <span> — @Format.Bytes(used)</span>
+                    }
+                </MudText>
+            }
+        </div>
+
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mt-3">
+            Anything pointed at <code>@Pool.MountPoint</code> — a share, a container, a backup —
+            will stop finding its files until it is pointed somewhere else or the pool is recreated.
+        </MudText>
+
+        @if (HasArray)
+        {
+            @*
+                Two separate things. The array protects the data disks, which are still here and
+                still protected; the pool only decided how they were presented.
+            *@
+            <MudText Typo="Typo.body2" Class="mud-text-secondary mt-3">
+                The SnapRAID array is left alone. It protects the disks themselves, which are not
+                going anywhere, so parity stays valid.
+            </MudText>
+        }
+
+        @if (_error is { Length: > 0 })
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mt-4">
+                @_error
+            </MudAlert>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cancel" Disabled="_busy">Cancel</MudButton>
+        <MudButton Color="Color.Error" Variant="Variant.Filled" Disabled="_busy" OnClick="RemoveAsync">
+            @(_busy ? "Removing…" : "Remove pool")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>The pool to remove.</summary>
+    [Parameter]
+    [EditorRequired]
+    public required MergerFsPool Pool { get; set; }
+
+    /// <summary>Whether a SnapRAID array exists, to say it is not affected.</summary>
+    [Parameter]
+    public bool HasArray { get; set; }
+
+    /// <summary>Does the removal and returns the message to show.</summary>
+    [Parameter]
+    [EditorRequired]
+    public required Func<string, Task<PoolManager.PoolResult>> Remove { get; set; }
+
+    private bool _busy;
+    private string? _error;
+
+    private async Task RemoveAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await Remove(Pool.MountPoint);
+
+            if (!result.Succeeded)
+            {
+                // Stays open: the usual failure is something holding the mount, which the reader
+                // can go and stop without losing this dialog's context.
+                _error = result.Message;
+
+                return;
+            }
+
+            MudDialog.Close(DialogResult.Ok(result.Message));
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}
