@@ -259,12 +259,53 @@ public sealed class DockerCli(
     public Task<DockerActionResult> PruneImagesAsync(CancellationToken cancellationToken = default) =>
         ActionAsync(["image", "prune", "--force"], "prune images", cancellationToken);
 
-    /// <summary>Creates a volume.</summary>
-    public Task<DockerActionResult> CreateVolumeAsync(
+    /// <summary>
+    /// Creates a volume, optionally storing its data at a chosen host path.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// With no path, Docker keeps the data under its own directory (<c>/var/lib/docker/volumes</c>)
+    /// — fine until it needs backing up, at which point it is buried on whichever disk Docker
+    /// happens to live on.
+    /// </para>
+    /// <para>
+    /// With a path, the volume is still a first-class named volume — compose refers to it by name
+    /// and Docker manages its lifecycle — but the bytes land somewhere chosen, such as a mount
+    /// that gets backed up. The incantation is the <c>local</c> driver's bind support:
+    /// <c>type=none,o=bind,device=/path</c>.
+    /// </para>
+    /// </remarks>
+    public async Task<DockerActionResult> CreateVolumeAsync(
         string name,
-        string driver = "local",
-        CancellationToken cancellationToken = default) =>
-        ActionAsync(["volume", "create", "--driver", driver, name], $"create volume {name}", cancellationToken);
+        string? hostPath = null,
+        CancellationToken cancellationToken = default)
+    {
+        var arguments = new List<string> { "volume", "create", "--driver", "local" };
+
+        if (!string.IsNullOrWhiteSpace(hostPath))
+        {
+            // Docker does not create it, and binds an empty directory instead — which looks like
+            // it worked and loses nothing only because there was nothing there yet.
+            try
+            {
+                Directory.CreateDirectory(hostPath);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                return new DockerActionResult
+                {
+                    Succeeded = false,
+                    Message = $"Could not create '{hostPath}': {ex.Message}",
+                };
+            }
+
+            arguments.AddRange(["--opt", "type=none", "--opt", "o=bind", "--opt", $"device={hostPath}"]);
+        }
+
+        arguments.Add(name);
+
+        return await ActionAsync([.. arguments], $"create volume {name}", cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Creates a network.

@@ -15,6 +15,32 @@
                       Error="@(_error is not null)"
                       ErrorText="@_error"
                       HelperText="Referenced from a container as name:/path/in/container." />
+
+        @* The reason this option exists: a volume left in Docker's own directory is buried on
+           whichever disk Docker lives on, which is rarely the one being backed up. *@
+        <MudCheckBox @bind-Value="_useHostPath" Color="Color.Primary" Dense="true" Class="mt-4"
+                     Label="Store its data at a path I choose" />
+
+        @if (_useHostPath)
+        {
+            <MudTextField @bind-Value="_hostPath"
+                          Label="Host path"
+                          Immediate="true"
+                          Placeholder="@SuggestedPath"
+                          Class="ml-8"
+                          HelperText="An absolute path. Created if it does not exist. Put it somewhere your backups cover." />
+
+            <MudText Typo="Typo.caption" Class="mud-text-secondary d-block ml-8 mt-1">
+                It stays a normal named volume — compose refers to it by name — but the bytes live here
+                instead of under <code>/var/lib/docker/volumes</code>.
+            </MudText>
+        }
+        else
+        {
+            <MudText Typo="Typo.caption" Class="mud-text-secondary d-block ml-8">
+                Data goes under <code>/var/lib/docker/volumes</code>, on whichever disk Docker lives on.
+            </MudText>
+        }
     </DialogContent>
 
     <DialogActions>
@@ -27,7 +53,12 @@
     [CascadingParameter]
     private IMudDialogInstance Dialog { get; set; } = default!;
 
+    /// <summary>A concrete example under a path a home server would plausibly back up.</summary>
+    private string SuggestedPath => $"/srv/data/{(_name.Length > 0 ? _name : "myvolume")}";
+
     private string _name = string.Empty;
+    private string _hostPath = string.Empty;
+    private bool _useHostPath;
     private string? _error;
     private bool _busy;
 
@@ -42,12 +73,21 @@
             return;
         }
 
+        if (_useHostPath && !_hostPath.StartsWith('/'))
+        {
+            // A relative path here would be resolved against the service's working directory,
+            // which is not a place anyone means.
+            _error = "The host path must be absolute, for example /srv/data/myvolume.";
+
+            return;
+        }
+
         _busy = true;
         _error = null;
 
         try
         {
-            var result = await Cli.CreateVolumeAsync(_name);
+            var result = await Cli.CreateVolumeAsync(_name, _useHostPath ? _hostPath.Trim() : null);
 
             if (!result.Succeeded)
             {

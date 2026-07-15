@@ -191,8 +191,39 @@ public sealed record DockerVolume
     /// <summary>Storage driver, usually <c>local</c>.</summary>
     public required string Driver { get; init; }
 
-    /// <summary>Path on the host where the volume's data lives.</summary>
+    /// <summary>
+    /// The path Docker reports as the volume's mount point.
+    /// </summary>
+    /// <remarks>
+    /// Not necessarily where the data is. For a volume bound to a host path, Docker still reports
+    /// <c>/var/lib/docker/volumes/{name}/_data</c> here, and that directory is <em>empty</em>
+    /// whenever no container is running — the real directory is only bind-mounted over it while
+    /// one is. Use <see cref="BackingPath"/> for anything that matters, such as a backup.
+    /// </remarks>
     public required string MountPoint { get; init; }
+
+    /// <summary>
+    /// Driver options, as given at creation. For the <c>local</c> driver a bound volume carries
+    /// <c>type</c>, <c>o</c> and <c>device</c>.
+    /// </summary>
+    public ImmutableDictionary<string, string> Options { get; init; } =
+        ImmutableDictionary<string, string>.Empty;
+
+    /// <summary>
+    /// The host path a bound volume's data actually lives in, or null for an ordinary volume.
+    /// </summary>
+    public string? DevicePath =>
+        Options.TryGetValue("device", out var device) && device.StartsWith('/') ? device : null;
+
+    /// <summary>
+    /// Where this volume's bytes really are — the answer to "what do I back up?".
+    /// </summary>
+    public string BackingPath => DevicePath ?? MountPoint;
+
+    /// <summary>
+    /// True when the volume is stored somewhere chosen rather than inside Docker's own directory.
+    /// </summary>
+    public bool IsBoundToPath => DevicePath is not null;
 
     /// <summary>When the volume was created.</summary>
     public DateTimeOffset? CreatedAt { get; init; }

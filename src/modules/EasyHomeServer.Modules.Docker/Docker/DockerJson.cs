@@ -223,6 +223,29 @@ internal static class DockerJson
         return [.. builder.OrderBy(a => a.NetworkName, StringComparer.Ordinal)];
     }
 
+    /// <summary>Reads a string-to-string object, tolerating the null Docker emits for an empty one.</summary>
+    private static ImmutableDictionary<string, string> ParseStringMap(JsonElement element, string name)
+    {
+        if (element.ValueKind != JsonValueKind.Object
+            || !element.TryGetProperty(name, out var map)
+            || map.ValueKind != JsonValueKind.Object)
+        {
+            return ImmutableDictionary<string, string>.Empty;
+        }
+
+        var builder = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+
+        foreach (var entry in map.EnumerateObject())
+        {
+            if (entry.Value.ValueKind == JsonValueKind.String)
+            {
+                builder[entry.Name] = entry.Value.GetString() ?? string.Empty;
+            }
+        }
+
+        return builder.ToImmutable();
+    }
+
     private static ImmutableDictionary<string, string> ParseLabels(JsonElement config)
     {
         if (config.ValueKind != JsonValueKind.Object
@@ -285,6 +308,10 @@ internal static class DockerJson
             Name = name,
             Driver = GetString(element, "Driver") ?? "local",
             MountPoint = GetString(element, "Mountpoint") ?? string.Empty,
+
+            // Carries the device= of a bound volume, which is the only place the real path
+            // appears — Mountpoint reports Docker's own directory either way.
+            Options = ParseStringMap(element, "Options"),
             CreatedAt = GetDate(element, "CreatedAt"),
         };
     }

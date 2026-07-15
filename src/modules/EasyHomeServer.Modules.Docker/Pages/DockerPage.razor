@@ -486,7 +486,7 @@ else
                         <tr>
                             <th>Name</th>
                             <th>Driver</th>
-                            <th>Mount point</th>
+                            <th>Stored at</th>
                             <th>Used by</th>
                             <th class="dk-actions">Actions</th>
                         </tr>
@@ -497,7 +497,21 @@ else
                             <tr>
                                 <td><b>@volume.Name</b></td>
                                 <td class="mud-text-secondary">@volume.Driver</td>
-                                <td class="mud-text-secondary dk-mono dk-path">@volume.MountPoint</td>
+                                <td class="dk-mono dk-path">
+                                    @* The real backing path, not Mountpoint. For a bound volume
+                                       Docker reports its own directory there, and that directory is
+                                       empty whenever no container is running — so a backup planned
+                                       from it would silently capture nothing. *@
+                                    <span class="mud-text-secondary">@volume.BackingPath</span>
+
+                                    @if (volume.IsBoundToPath)
+                                    {
+                                        <MudTooltip Text="Stored outside Docker's own directory, so it can be backed up with the rest of that path.">
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                                     Color="Color.Success" Class="ml-2 dk-chip">bound</MudChip>
+                                        </MudTooltip>
+                                    }
+                                </td>
                                 <td>
                                     @if (volume.IsOrphaned)
                                     {
