@@ -32,6 +32,7 @@ public sealed class DockerModule : IModule
         var options = context.Configuration.Get<DockerOptions>() ?? new DockerOptions();
 
         services.AddSingleton(options);
+        services.AddSingleton<MacvlanShim>();
         services.AddSingleton<DockerCli>();
         services.AddSingleton<ComposeCli>();
         services.AddSingleton<ComposeDiscovery>();

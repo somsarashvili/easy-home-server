@@ -26,7 +26,11 @@ namespace EasyHomeServer.Modules.Docker.Docker;
 /// serves, in full.
 /// </para>
 /// </remarks>
-public sealed class DockerCli(ISystemRunner systemRunner, DockerOptions options, ILogger<DockerCli> logger)
+public sealed class DockerCli(
+    ISystemRunner systemRunner,
+    DockerOptions options,
+    MacvlanShim shim,
+    ILogger<DockerCli> logger)
 {
     private const string Executable = "docker";
 
@@ -228,9 +232,28 @@ public sealed class DockerCli(ISystemRunner systemRunner, DockerOptions options,
     public Task<DockerActionResult> RemoveVolumeAsync(string name, CancellationToken cancellationToken = default) =>
         ActionAsync(["volume", "rm", name], $"remove volume {name}", cancellationToken);
 
-    /// <summary>Removes a network.</summary>
-    public Task<DockerActionResult> RemoveNetworkAsync(string id, CancellationToken cancellationToken = default) =>
-        ActionAsync(["network", "rm", id], $"remove network {id}", cancellationToken);
+    /// <summary>
+    /// Removes a network, and its host shim if it has one.
+    /// </summary>
+    /// <remarks>
+    /// The shim goes with it. Left behind, its unit would recreate an interface on every boot and
+    /// route a range belonging to a network that no longer exists.
+    /// </remarks>
+    public async Task<DockerActionResult> RemoveNetworkAsync(
+        string id,
+        string name,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await ActionAsync(["network", "rm", id], $"remove network {name}", cancellationToken)
+            .ConfigureAwait(false);
+
+        if (result.Succeeded)
+        {
+            await shim.RemoveAsync(name, cancellationToken).ConfigureAwait(false);
+        }
+
+        return result;
+    }
 
     /// <summary>Removes every dangling image.</summary>
     public Task<DockerActionResult> PruneImagesAsync(CancellationToken cancellationToken = default) =>
@@ -253,7 +276,7 @@ public sealed class DockerCli(ISystemRunner systemRunner, DockerOptions options,
     /// unreachable. It looks like it worked, which is worse than failing, so <see cref="NetworkSpec"/>
     /// requires them up front.
     /// </remarks>
-    public Task<DockerActionResult> CreateNetworkAsync(
+    public async Task<DockerActionResult> CreateNetworkAsync(
         NetworkSpec spec,
         CancellationToken cancellationToken = default)
     {
@@ -261,10 +284,11 @@ public sealed class DockerCli(ISystemRunner systemRunner, DockerOptions options,
 
         if (spec.Validate() is { } error)
         {
-            return Task.FromResult(new DockerActionResult { Succeeded = false, Message = error });
+            return new DockerActionResult { Succeeded = false, Message = error };
         }
 
         var arguments = new List<string> { "network", "create", "--driver", spec.Driver };
+        string? shimAddress = null;
 
         if (spec.IsLanAddressed)
         {
@@ -281,13 +305,37 @@ public sealed class DockerCli(ISystemRunner systemRunner, DockerOptions options,
                 arguments.Add(spec.IpRange);
             }
 
+            if (spec.CreateHostShim && MacvlanShim.ShimAddressFor(spec.IpRange) is { } address)
+            {
+                shimAddress = address;
+
+                // Reserves the shim's address so docker never hands it to a container. Without
+                // this the first container would take it and collide with the host, which
+                // presents as intermittent, baffling connectivity.
+                arguments.Add("--aux-address");
+                arguments.Add($"host={address}");
+            }
+
             arguments.Add("--opt");
             arguments.Add($"parent={spec.Parent}");
         }
 
         arguments.Add(spec.Name);
 
-        return ActionAsync([.. arguments], $"create network {spec.Name}", cancellationToken);
+        var result = await ActionAsync([.. arguments], $"create network {spec.Name}", cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!result.Succeeded || shimAddress is null)
+        {
+            return result;
+        }
+
+        // The network exists at this point. If the shim fails, say so plainly rather than
+        // rolling the network back — the network is useful without it, and silently undoing
+        // what the operator asked for is worse than a partial success they can act on.
+        return await shim
+            .InstallAsync(spec.Name, spec.Parent, shimAddress, spec.IpRange, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>

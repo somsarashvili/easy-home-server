@@ -6,6 +6,7 @@
 @inject DockerPoller Poller
 @inject DockerCli Cli
 @inject ComposeCli Compose
+@inject MacvlanShim Shim
 @inject DockerOptions Options
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
@@ -537,7 +538,29 @@ else
                     @foreach (var network in _snapshot.Networks.OrderBy(n => n.Name, StringComparer.Ordinal))
                     {
                         <tr>
-                            <td><b>@network.Name</b></td>
+                            <td>
+                                <b>@network.Name</b>
+                                @if (network.Driver is "macvlan" or "ipvlan")
+                                {
+                                    @* Whether the host can reach these containers is the first thing
+                                       anyone wants to know about a macvlan, and it is invisible
+                                       otherwise — it presents as a container that will not respond. *@
+                                    @if (Shim.IsInstalled(network.Name))
+                                    {
+                                        <MudTooltip Text="This server has a shim interface for this network, so it can reach these containers.">
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                                     Color="Color.Success" Class="ml-2 dk-chip">reachable</MudChip>
+                                        </MudTooltip>
+                                    }
+                                    else
+                                    {
+                                        <MudTooltip Text="Containers here have their own LAN address, but this server cannot reach them (macvlan isolation). Recreate the network with the shim option to change that.">
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                                     Color="Color.Default" Class="ml-2 dk-chip">isolated from host</MudChip>
+                                        </MudTooltip>
+                                    }
+                                }
+                            </td>
                             <td class="mud-text-secondary">@network.Driver</td>
                             <td class="mud-text-secondary">@network.Scope</td>
                             <td class="mud-text-secondary dk-mono">
@@ -922,7 +945,7 @@ else
             return;
         }
 
-        var result = await Cli.RemoveNetworkAsync(network.Id);
+        var result = await Cli.RemoveNetworkAsync(network.Id, network.Name);
         Snackbar.Add(result.Message, result.Succeeded ? Severity.Success : Severity.Error);
     }
 

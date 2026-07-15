@@ -68,6 +68,19 @@
                                   HelperText="A slice your router will not hand out, for example 192.168.1.240/28." />
                 </MudItem>
             </MudGrid>
+
+            @* The escape hatch from the isolation warned about above. Off by default: it is host
+               network configuration, and a macvlan is often chosen precisely to keep containers
+               away from the host. *@
+            <MudCheckBox @bind-Value="_spec.CreateHostShim" Color="Color.Primary" Class="mt-3"
+                         Label="Let this server reach these containers" />
+
+            <MudText Typo="Typo.caption" Class="mud-text-secondary d-block ml-8 mb-2">
+                Adds a small interface on this server and a boot-time systemd unit to recreate it, so
+                the server can talk to the containers despite the isolation above. The shim takes
+                @(ShimAddressLabel) from the range, reserved so no container is given it. Removed with
+                the network.
+            </MudText>
         }
 
         @if (_error is not null)
@@ -152,6 +165,10 @@
 
         return $"{new System.Net.IPAddress(bytes)}/28";
     }
+
+    /// <summary>The address the shim will take, shown so the operator can see what is reserved.</summary>
+    private string ShimAddressLabel =>
+        MacvlanShim.ShimAddressFor(_spec.IpRange) is { } address ? address : "the first address";
 
     private async Task CreateAsync()
     {

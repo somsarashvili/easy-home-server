@@ -17,6 +17,7 @@ public sealed class DockerPoller : ModuleBackgroundService
 {
     private readonly DockerCli _cli;
     private readonly ComposeDiscovery _compose;
+    private readonly MacvlanShim _shim;
     private readonly IEventBus _eventBus;
     private readonly TimeSpan _interval;
 
@@ -33,6 +34,7 @@ public sealed class DockerPoller : ModuleBackgroundService
     public DockerPoller(
         DockerCli cli,
         ComposeDiscovery compose,
+        MacvlanShim shim,
         IEventBus eventBus,
         DockerOptions options,
         ILoggerFactory loggerFactory)
@@ -40,6 +42,7 @@ public sealed class DockerPoller : ModuleBackgroundService
     {
         _cli = cli;
         _compose = compose;
+        _shim = shim;
         _eventBus = eventBus;
         _interval = TimeSpan.FromSeconds(options.PollIntervalSeconds);
     }
@@ -91,6 +94,13 @@ public sealed class DockerPoller : ModuleBackgroundService
             // Needs both lists: whether a container has its own address on the LAN depends on the
             // *network's* driver, which the container's own inspect output does not carry.
             containers = WithLanAddresses(containers, networks);
+
+            // A network removed outside this module leaves its shim behind, recreating an
+            // interface at every boot for a range nothing owns. Reconciled rather than relying on
+            // the removal having come through the UI.
+            await _shim
+                .ReconcileAsync([.. networks.Select(n => n.Name)], cancellationToken)
+                .ConfigureAwait(false);
 
             var snapshot = new DockerSnapshot
             {

@@ -210,12 +210,13 @@ internal sealed class SystemRunner(ILogger<SystemRunner> logger) : ISystemRunner
             SystemctlAction.Enable => "enable",
             SystemctlAction.Disable => "disable",
             SystemctlAction.Status => "status",
+            SystemctlAction.DaemonReload => "daemon-reload",
             SystemctlAction.Reboot => "reboot",
             SystemctlAction.PowerOff => "poweroff",
             _ => throw new ArgumentOutOfRangeException(nameof(action), action, "Unsupported systemctl action."),
         };
 
-        var isSystemScoped = action is SystemctlAction.Reboot or SystemctlAction.PowerOff;
+        var isSystemScoped = action is SystemctlAction.Reboot or SystemctlAction.PowerOff or SystemctlAction.DaemonReload;
 
         if (isSystemScoped && !string.IsNullOrEmpty(unit))
         {

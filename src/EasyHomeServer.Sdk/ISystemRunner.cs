@@ -114,6 +114,16 @@ public enum SystemctlAction
     /// <summary>Query a unit's status.</summary>
     Status,
 
+    /// <summary>
+    /// Make systemd re-read unit files. Takes no unit.
+    /// </summary>
+    /// <remarks>
+    /// Required after a module writes or deletes a unit: until systemd rereads them, the new
+    /// unit does not exist as far as enable or start are concerned, and both fail with a
+    /// confusing "not found".
+    /// </remarks>
+    DaemonReload,
+
     /// <summary>Reboot the machine. Takes no unit.</summary>
     Reboot,
 

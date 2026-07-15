@@ -37,6 +37,16 @@ public sealed partial class NetworkSpec
     /// </summary>
     public string IpRange { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Whether to give this host a shim interface so it can reach containers on this network.
+    /// </summary>
+    /// <remarks>
+    /// Off by default: it is host network configuration, and a macvlan is often chosen precisely
+    /// to keep the containers separate from the host. Requires an IP range, since the shim takes
+    /// its address from inside it. See <see cref="MacvlanShim"/>.
+    /// </remarks>
+    public bool CreateHostShim { get; set; }
+
     [GeneratedRegex("^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")]
     private static partial Regex NetworkNamePattern { get; }
 
@@ -80,6 +90,14 @@ public sealed partial class NetworkSpec
         if (!IsInSubnet(gateway, Subnet))
         {
             return $"Gateway {Gateway} is not inside {Subnet}.";
+        }
+
+        if (CreateHostShim && IpRange.Length == 0)
+        {
+            // The shim's address comes from inside the range so the whole arrangement stays
+            // within one block reserved from DHCP; without a range there is nowhere safe to put it.
+            return "Letting this server reach the containers needs an IP range: the shim takes the "
+                   + "first address in it.";
         }
 
         if (IpRange is { Length: > 0 })
