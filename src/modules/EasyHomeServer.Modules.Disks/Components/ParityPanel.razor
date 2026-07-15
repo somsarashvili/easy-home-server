@@ -1,6 +1,9 @@
 @using EasyHomeServer.Modules.Disks.SnapRaid
 @using EasyHomeServer.Modules.Disks.MergerFs
 
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
 @* SnapRAID: what parity protects, and whether it is currently keeping up. *@
 
 @if (Reading is null)
@@ -40,12 +43,26 @@ else
                 reading the array is expensive and takes the lock a sync needs.</span>
         </MudText>
 
-        <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary"
-                   StartIcon="@Icons.Material.Filled.Refresh"
-                   Disabled="_refreshing"
-                   OnClick="RefreshAsync">
-            @(_refreshing ? "Reading…" : "Read now")
-        </MudButton>
+        <div class="d-flex align-center">
+            <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.Refresh"
+                       Disabled="_refreshing"
+                       OnClick="RefreshAsync">
+                @(_refreshing ? "Reading…" : "Read now")
+            </MudButton>
+
+            @if (AllowControl && Reading.Config is not null)
+            {
+                <MudTooltip Text="Stop protecting these disks. No files are deleted.">
+                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error"
+                               StartIcon="@Icons.Material.Filled.ShieldMoon"
+                               Disabled="_refreshing"
+                               OnClick="RemoveArrayAsync">
+                        Remove array
+                    </MudButton>
+                </MudTooltip>
+            }
+        </div>
     </div>
 
     @if (Reading.Outcome == SnapRaidOutcome.Busy)
@@ -98,12 +115,20 @@ else
             <MudPaper Class="pa-3 h-100" Elevation="0">
                 <MudText Typo="Typo.caption" Class="mud-text-secondary">Protection</MudText>
                 <div class="d-flex align-center mt-1">
-                    <MudIcon Icon="@(_status.IsFullySynced ? Icons.Material.Filled.VerifiedUser : Icons.Material.Filled.GppMaybe)"
-                             Color="@(_status.IsFullySynced ? Color.Success : Color.Warning)" Class="mr-2" />
-                    <MudText Typo="Typo.h6">@(_status.IsFullySynced ? "Fully synced" : "Not fully synced")</MudText>
+                    <MudIcon Icon="@ProtectionIcon" Color="@ProtectionColor" Class="mr-2" />
+                    <MudText Typo="Typo.h6">@ProtectionText</MudText>
                 </div>
                 <MudText Typo="Typo.body2" Class="mud-text-secondary mt-1">
-                    @if (_status.IsFullySynced)
+                    @if (!HasEverSynced)
+                    {
+                        @*
+                            SnapRAID calls a never-synced array fully synced, which is true of the
+                            nothing it knows about and the opposite of what someone reads. Until the
+                            first sync there is no parity at all.
+                        *@
+                        @("No sync has run, so nothing is protected yet. The first sync reads every file and can take hours.")
+                    }
+                    else if (_status.IsFullySynced)
                     {
                         @($"Parity covers every file. {ParityCountText} could fail without data loss.")
                     }
@@ -275,6 +300,14 @@ else
     [Parameter]
     public double IntervalMinutes { get; set; } = 10;
 
+    /// <summary>Whether the UI may change the array.</summary>
+    [Parameter]
+    public bool AllowControl { get; set; } = true;
+
+    /// <summary>Called after the array is removed, so the page can re-read.</summary>
+    [Parameter]
+    public EventCallback OnChanged { get; set; }
+
     private static readonly CultureInfo Culture = CultureInfo.InvariantCulture;
 
     private bool _refreshing;
@@ -300,8 +333,57 @@ else
         }
     }
 
+    private async Task RemoveArrayAsync()
+    {
+        if (Reading?.Config is not { } config)
+        {
+            return;
+        }
+
+        var parameters = new DialogParameters<RemoveArrayDialog>
+        {
+            { dialog => dialog.Config, config },
+            { dialog => dialog.ConfigPath, ConfigPath },
+        };
+
+        var dialog = await DialogService.ShowAsync<RemoveArrayDialog>("Remove array", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: string message })
+        {
+            Snackbar.Add(message, Severity.Success);
+
+            await OnChanged.InvokeAsync();
+            await RefreshAsync();
+        }
+    }
+
     /// <summary>The report to render: this reading's, or the last one that had numbers.</summary>
     private SnapRaidStatus? _status => Reading?.Status ?? LastGoodStatus;
+
+    /// <summary>
+    /// Whether a sync has ever run.
+    /// </summary>
+    /// <remarks>
+    /// SnapRAID knows a file only once a sync has recorded it, so an array configured a minute ago
+    /// reports zero files and no work outstanding — which it renders as fully synced. Nothing is
+    /// protected in that state, and it is exactly when someone is most likely to be looking.
+    /// </remarks>
+    private bool HasEverSynced => _status is { TotalFiles: > 0 };
+
+    private string ProtectionText => !HasEverSynced
+        ? "Never synced"
+        : _status is { IsFullySynced: true } ? "Fully synced" : "Not fully synced";
+
+    private Color ProtectionColor => !HasEverSynced || _status is { IsFullySynced: false }
+        ? Color.Warning
+        : Color.Success;
+
+    private string ProtectionIcon => !HasEverSynced || _status is { IsFullySynced: false }
+        ? Icons.Material.Filled.GppMaybe
+        : Icons.Material.Filled.VerifiedUser;
 
     private string ParityCountText =>
         Reading?.Config?.ParityCount switch

@@ -258,7 +258,9 @@ else
                          Pools="_snapshot.Pools"
                          ConfigPath="@Options.SnapRaidConfigPath"
                          IntervalMinutes="@(Options.SnapRaidPollIntervalSeconds / 60)"
-                         OnRefresh="@(() => SnapRaid.RefreshAsync())" />
+                         AllowControl="Options.AllowPoolControl"
+                         OnRefresh="@(() => SnapRaid.RefreshAsync())"
+                         OnChanged="RefreshAsync" />
         </MudTabPanel>
     </MudTabs>
 

@@ -30,6 +30,7 @@ public sealed record ArraySpec
 /// </remarks>
 public sealed class SnapRaidConfigWriter(
     ISystemRunner systemRunner,
+    SnapRaidCli cli,
     DisksOptions options,
     ILogger<SnapRaidConfigWriter> logger)
 {
@@ -61,6 +62,155 @@ public sealed class SnapRaidConfigWriter(
 
         /// <summary>What happened, in words.</summary>
         public required string Message { get; init; }
+    }
+
+    /// <summary>A file SnapRAID made, and what it costs to keep.</summary>
+    public sealed record ArrayArtifact
+    {
+        /// <summary>Where it is.</summary>
+        public required string Path { get; init; }
+
+        /// <summary>Its size, or null when it is not there.</summary>
+        public long? SizeBytes { get; init; }
+
+        /// <summary>Whether SnapRAID's parity lives here, as opposed to its index.</summary>
+        public required bool IsParity { get; init; }
+    }
+
+    /// <summary>
+    /// The files an array leaves on disk: parity, and the content files indexing what it protects.
+    /// </summary>
+    /// <remarks>
+    /// Listed with their sizes because parity is the largest single file on the machine — a whole
+    /// disk's worth — and someone deciding whether to delete it deserves to know that before
+    /// rather than after.
+    /// </remarks>
+    public ImmutableArray<ArrayArtifact> ListArtifacts(SnapRaidConfig config) =>
+    [
+        .. config.ParityFiles.Select(path => new ArrayArtifact
+        {
+            Path = path,
+            SizeBytes = FileSize(path),
+            IsParity = true,
+        }),
+        .. config.ContentFiles.Select(path => new ArrayArtifact
+        {
+            Path = path,
+            SizeBytes = FileSize(path),
+            IsParity = false,
+        }),
+    ];
+
+    /// <summary>
+    /// Removes the array: moves snapraid.conf aside, and optionally deletes what it made.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Deletes no data. Parity and content files are SnapRAID's own; every protected file lives on
+    /// its data disk untouched, and each disk stays independently readable — which is the property
+    /// SnapRAID is chosen for in the first place.
+    /// </para>
+    /// <para>
+    /// What is actually lost is the ability to rebuild a failed disk. Rebuilding the array later
+    /// means a full sync, which reads every file.
+    /// </para>
+    /// </remarks>
+    public async Task<WriteResult> RemoveAsync(
+        SnapRaidConfig config,
+        bool deleteArtifacts,
+        CancellationToken cancellationToken = default)
+    {
+        // Deleting the parity a running sync is writing would leave it half-made and the config
+        // gone, with nothing to say why.
+        if (await cli.IsRunningAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return new WriteResult
+            {
+                Succeeded = false,
+                Message = "snapraid is running — a sync or scrub is in progress, and this machine may "
+                          + "run one from cron. Let it finish, then try again.",
+            };
+        }
+
+        try
+        {
+            var backupPath = options.SnapRaidConfigPath + ".bak";
+
+            if (File.Exists(options.SnapRaidConfigPath))
+            {
+                // Kept, not deleted, for the same reason as the pool's unit: it is the record of
+                // how the array was laid out, and it is a few kilobytes.
+                var moved = await systemRunner
+                    .RunAsync("mv", ["-f", options.SnapRaidConfigPath, backupPath], cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (!moved.Succeeded)
+                {
+                    return new WriteResult
+                    {
+                        Succeeded = false,
+                        Message = $"Could not move {options.SnapRaidConfigPath} aside: {moved.StandardError.Trim()}",
+                    };
+                }
+            }
+
+            var freed = 0L;
+            var failures = new List<string>();
+
+            if (deleteArtifacts)
+            {
+                foreach (var artifact in ListArtifacts(config).Where(a => a.SizeBytes is not null))
+                {
+                    var removed = await systemRunner
+                        .RunAsync("rm", ["-f", artifact.Path], cancellationToken)
+                        .ConfigureAwait(false);
+
+                    if (removed.Succeeded)
+                    {
+                        freed += artifact.SizeBytes ?? 0;
+                    }
+                    else
+                    {
+                        failures.Add(artifact.Path);
+                    }
+                }
+            }
+
+            logger.LogInformation("Removed the array; config kept at {BackupPath}, freed {Freed} bytes.",
+                backupPath, freed);
+
+            var message = deleteArtifacts
+                ? $"Array removed and {Format.Bytes(freed)} freed. Every protected file is untouched on "
+                  + $"its data disk. The configuration is kept at {backupPath}."
+                : $"Array removed. Parity and content files were left in place. The configuration is "
+                  + $"kept at {backupPath}.";
+
+            if (failures.Count > 0)
+            {
+                message += $" Could not delete: {string.Join(", ", failures)}.";
+            }
+
+            return new WriteResult { Succeeded = true, Message = message };
+        }
+        catch (Exception ex) when (ex is SystemOperationException or IOException
+                                       or UnauthorizedAccessException)
+        {
+            logger.LogError(ex, "Could not remove the array.");
+
+            return new WriteResult { Succeeded = false, Message = ex.Message };
+        }
+    }
+
+    private static long? FileSize(string path)
+    {
+        try
+        {
+            return File.Exists(path) ? new FileInfo(path).Length : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Whether a config already exists, whoever wrote it.</summary>

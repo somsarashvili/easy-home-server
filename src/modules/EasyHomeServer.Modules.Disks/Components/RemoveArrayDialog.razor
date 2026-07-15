@@ -1,0 +1,137 @@
+@using EasyHomeServer.Modules.Disks.SnapRaid
+
+@inject SnapRaidConfigWriter ArrayWriter
+
+@*
+    Confirms removing the array. Unlike removing a pool, this one has a real cost and says so: no
+    file is deleted, but the ability to rebuild a failed disk goes, and getting it back means a
+    full sync over every file.
+*@
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body1">Remove the SnapRAID array?</MudText>
+
+        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-3">
+            The disks stop being protected. Nothing is deleted from them, but a disk failing after
+            this cannot be rebuilt.
+        </MudAlert>
+
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mt-3">
+            Your files are not touched. Parity and content files are SnapRAID's own bookkeeping;
+            every protected file stays on its data disk, and each disk remains readable on its own.
+            @if (Config.DataDisks.Length > 0)
+            {
+                <span>
+                    @string.Join(", ", Config.DataDisks.Select(d => d.Path)) keep everything they hold.
+                </span>
+            }
+        </MudText>
+
+        @if (Artifacts.Length > 0)
+        {
+            <MudCheckBox T="bool" @bind-Value="_deleteArtifacts" Dense="true" Color="Color.Primary"
+                         Class="mt-3">
+                Delete SnapRAID's parity and index files (frees @Format.Bytes(TotalBytes))
+            </MudCheckBox>
+
+            <div class="ml-8">
+                @foreach (var artifact in Artifacts)
+                {
+                    <MudText Typo="Typo.caption" Class="dsk-mono mud-text-secondary d-block">
+                        @artifact.Path
+                        @if (artifact.SizeBytes is { } size)
+                        {
+                            <span> — @Format.Bytes(size)</span>
+                        }
+                        else
+                        {
+                            <span> — not there</span>
+                        }
+                    </MudText>
+                }
+            </div>
+
+            @if (!_deleteArtifacts)
+            {
+                @* Keeping them is a real option: rebuilding an array from stale parity is not
+                   possible, but the files are harmless and the space may not be wanted back. *@
+                <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-2 ml-8">
+                    Left in place, they keep using @Format.Bytes(TotalBytes) and go stale immediately.
+                    They are of no use to a future array, which builds its own.
+                </MudText>
+            }
+        }
+
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mt-3">
+            Setting the array up again later is a full sync, which reads every file and can take
+            hours. The configuration is kept as <code>@(ConfigPath).bak</code> either way.
+        </MudText>
+
+        @if (_error is { Length: > 0 })
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mt-4">
+                @_error
+            </MudAlert>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cancel" Disabled="_busy">Cancel</MudButton>
+        <MudButton Color="Color.Error" Variant="Variant.Filled" Disabled="_busy" OnClick="RemoveAsync">
+            @(_busy ? "Removing…" : "Remove array")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>The array as configured.</summary>
+    [Parameter]
+    [EditorRequired]
+    public required SnapRaidConfig Config { get; set; }
+
+    /// <summary>Where snapraid.conf lives, quoted in the messages that mention it.</summary>
+    [Parameter]
+    public string ConfigPath { get; set; } = "/etc/snapraid.conf";
+
+    private bool _deleteArtifacts = true;
+    private bool _busy;
+    private string? _error;
+    private ImmutableArray<SnapRaidConfigWriter.ArrayArtifact> _artifacts = [];
+
+    private ImmutableArray<SnapRaidConfigWriter.ArrayArtifact> Artifacts => _artifacts;
+
+    private long TotalBytes => _artifacts.Sum(a => a.SizeBytes ?? 0);
+
+    protected override void OnInitialized() => _artifacts = ArrayWriter.ListArtifacts(Config);
+
+    private async Task RemoveAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await ArrayWriter.RemoveAsync(Config, _deleteArtifacts);
+
+            if (!result.Succeeded)
+            {
+                // Stays open: the usual refusal is a cron sync holding the array, which finishes.
+                _error = result.Message;
+
+                return;
+            }
+
+            MudDialog.Close(DialogResult.Ok(result.Message));
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

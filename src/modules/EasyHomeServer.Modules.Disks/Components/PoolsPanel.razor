@@ -6,6 +6,7 @@
 @inject DiskPoller Poller
 @inject PoolManager PoolManager
 @inject SnapRaidConfigWriter ArrayWriter
+@inject SnapRaidPoller SnapRaid
 
 @* The mergerfs pools: what they present, and which disks are actually behind them. *@
 
@@ -260,6 +261,14 @@
         }
     }
 
+    /// <summary>
+    /// Re-reads the disks, and the array with them.
+    /// </summary>
+    /// <remarks>
+    /// Both, because creating a pool can write snapraid.conf too. The array is otherwise read on a
+    /// ten-minute clock, so without this the Parity tab goes on saying there is no array for up to
+    /// ten minutes after this dialog just made one.
+    /// </remarks>
     private async Task RefreshAsync()
     {
         _busy = true;
@@ -267,6 +276,7 @@
         try
         {
             await Poller.RefreshAsync();
+            await SnapRaid.RefreshAsync();
         }
         finally
         {

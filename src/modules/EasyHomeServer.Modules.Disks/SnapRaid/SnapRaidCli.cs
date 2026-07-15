@@ -81,6 +81,40 @@ public sealed class SnapRaidCli(ISystemRunner systemRunner, DisksOptions options
         }
     }
 
+    /// <summary>
+    /// Whether a snapraid is running right now.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Asking the process table rather than running <c>snapraid status</c> and reading its refusal:
+    /// status loads the whole content file, which is a few hundred MiB on the real array, and this
+    /// is asked before an action rather than on a poll. It also answers when status could not.
+    /// </para>
+    /// <para>
+    /// <c>-x</c> matches the process name exactly, so it cannot match this service's own command
+    /// line the way a <c>-f</c> pattern search would.
+    /// </para>
+    /// </remarks>
+    public async Task<bool> IsRunningAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var result = await systemRunner
+                .RunAsync("pgrep", ["-x", Executable], cancellationToken)
+                .ConfigureAwait(false);
+
+            // pgrep exits 0 when it matched something, 1 when it did not.
+            return result.ExitCode == 0;
+        }
+        catch (SystemOperationException ex)
+        {
+            logger.LogWarning(ex, "Could not check whether snapraid is running; assuming it is, to be safe.");
+
+            // Refusing an action wrongly is recoverable; running one over a live sync is not.
+            return true;
+        }
+    }
+
     /// <summary>Reads the array: its configuration, and what SnapRAID says about it.</summary>
     public async Task<SnapRaidReading> ReadAsync(CancellationToken cancellationToken = default)
     {
