@@ -20,10 +20,32 @@ public sealed class DisksOptions
     }
 
     /// <summary>
-    /// Where this module creates mount points. Anywhere outside it must already exist, so a typo
-    /// cannot mount a filesystem over part of the running system.
+    /// Where this module may create a mount point.
     /// </summary>
-    public string MountRoot { get; set; } = "/srv";
+    /// <remarks>
+    /// <para>
+    /// Anywhere else must already exist, so a mistyped path cannot have a directory conjured for it
+    /// and a filesystem mounted over the result. The guard is about creating directories, not about
+    /// mounting: an existing path anywhere may still be used.
+    /// </para>
+    /// <para>
+    /// All three are the places the filesystem hierarchy sets aside for this, and creating a
+    /// directory under any of them is what they are for. <c>/mnt</c> matters most in practice —
+    /// it is where hand-built arrays put their disks, so leaving it out meant refusing to create
+    /// the very directories a pool is assembled from.
+    /// </para>
+    /// <para>
+    /// Settable, not a get-only collection: the binder populates one of those by adding to it, so
+    /// configuring this would extend the defaults rather than replace them, and there would be no
+    /// way to narrow the list.
+    /// </para>
+    /// </remarks>
+    public string[] MountRoots { get; set; } = ["/srv", "/mnt", "/media"];
+
+    /// <summary>
+    /// Where a suggested mount point goes by default. The first of <see cref="MountRoots"/>.
+    /// </summary>
+    public string DefaultMountRoot => MountRoots.Length > 0 ? MountRoots[0] : "/srv";
 
     /// <summary>The fstab to manage. Configurable so it can be pointed elsewhere for a test.</summary>
     public string FstabPath { get; set; } = "/etc/fstab";

@@ -22,7 +22,7 @@
                       Immediate="true"
                       Error="@(_error is not null)"
                       ErrorText="@_error"
-                      HelperText="@($"Created if it does not exist, as long as it is under {Options.MountRoot}.")" />
+                      HelperText="@($"Created if it does not exist, as long as it is under {string.Join(", ", Options.MountRoots)}. Anywhere else has to exist already.")" />
 
         <MudCheckBox @bind-Value="_persist" Color="Color.Primary" Dense="true" Class="mt-4"
                      Label="Mount automatically at boot" />

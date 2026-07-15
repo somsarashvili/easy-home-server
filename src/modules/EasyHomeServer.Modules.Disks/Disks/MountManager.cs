@@ -53,7 +53,7 @@ public sealed partial class MountManager(ISystemRunner systemRunner, DisksOption
         var cleaned = new string([.. name.Select(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' ? c : '-')])
             .Trim('-');
 
-        return System.IO.Path.Combine(options.MountRoot, cleaned.Length > 0 ? cleaned : device.Name);
+        return System.IO.Path.Combine(options.DefaultMountRoot, cleaned.Length > 0 ? cleaned : device.Name);
     }
 
     /// <summary>
@@ -221,19 +221,27 @@ public sealed partial class MountManager(ISystemRunner systemRunner, DisksOption
             return $"Refusing to mount over {mountPoint}: the running system needs it.";
         }
 
-        var root = System.IO.Path.GetFullPath(options.MountRoot);
         var resolved = System.IO.Path.GetFullPath(mountPoint);
 
-        // Outside the mount root, the directory has to already exist — this will not create a
-        // path anywhere it likes.
-        if (!resolved.StartsWith(root + System.IO.Path.DirectorySeparatorChar, StringComparison.Ordinal)
-            && !Directory.Exists(resolved))
+        // Outside the roots meant for mounts, the directory has to already exist — this will not
+        // conjure a path anywhere it likes, so a typo cannot get a directory of its own and a
+        // filesystem mounted over it. An existing path anywhere is still fair game.
+        if (!IsUnderAMountRoot(resolved) && !Directory.Exists(resolved))
         {
-            return $"'{resolved}' does not exist. Either create it first, or mount under {options.MountRoot}.";
+            return $"'{resolved}' does not exist. Either create it first, or mount under "
+                   + $"{string.Join(", ", options.MountRoots)}.";
         }
 
         return null;
     }
+
+    /// <summary>Whether a path is inside one of the roots this module may create under.</summary>
+    private bool IsUnderAMountRoot(string resolved) =>
+        options.MountRoots.Any(root =>
+            resolved.StartsWith(
+                System.IO.Path.GetFullPath(root).TrimEnd(System.IO.Path.DirectorySeparatorChar)
+                + System.IO.Path.DirectorySeparatorChar,
+                StringComparison.Ordinal));
 
     /// <summary>
     /// Whether a device is mounted at boot — by anyone, not only by this module.
