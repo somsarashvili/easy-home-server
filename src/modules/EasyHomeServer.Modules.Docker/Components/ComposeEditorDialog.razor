@@ -175,13 +175,13 @@
                                                                   Error="@(HostNameError(service) is not null)"
                                                                   ErrorText="@HostNameError(service)"
                                                                   HelperText="@($"Reachable at {EffectiveHostName(service)}. Defaults to the container name, which Compose builds as project-service-1.")"
-                                                                  ValueChanged="@((string v) => SetLabel(service, AvahiLabels.HostName, v))" />
+                                                                  ValueChanged="@(v => SetLabel(service, AvahiLabels.HostName, v))" />
                                                 </MudItem>
                                                 <MudItem xs="12" sm="6">
                                                     <MudTextField Value="@GetLabel(service, AvahiLabels.Port)" T="string"
                                                                   Label="Port to advertise" Immediate="true"
                                                                   HelperText="It has no published ports, so name the port it listens on."
-                                                                  ValueChanged="@((string v) => SetLabel(service, AvahiLabels.Port, v))" />
+                                                                  ValueChanged="@(v => SetLabel(service, AvahiLabels.Port, v))" />
                                                 </MudItem>
                                             }
 
@@ -190,7 +190,7 @@
                                                               Label="Advertised name" Immediate="true"
                                                               Placeholder="@EffectiveDisplayName(service)"
                                                               HelperText="How it appears when browsing the network. Free text; %h is this server's hostname."
-                                                              ValueChanged="@((string v) => SetLabel(service, AvahiLabels.Name, v))" />
+                                                              ValueChanged="@(v => SetLabel(service, AvahiLabels.Name, v))" />
                                             </MudItem>
                                         </MudGrid>
                                     }
