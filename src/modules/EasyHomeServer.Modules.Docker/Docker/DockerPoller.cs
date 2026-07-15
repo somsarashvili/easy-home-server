@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using EasyHomeServer.Contracts.Docker;
 using EasyHomeServer.Sdk;
 using Microsoft.Extensions.Logging;
 
@@ -91,7 +92,22 @@ public sealed class DockerPoller : ModuleBackgroundService
 
             Latest = snapshot;
 
+            // Internal snapshot for this module's own page…
             await _eventBus.PublishAsync(snapshot, cancellationToken).ConfigureAwait(false);
+
+            // …and the narrow, shared contract for everyone else. Published every poll even when
+            // nothing changed: it is the authoritative state subscribers reconcile against, so a
+            // subscriber that starts late or misses a delta still converges.
+            await _eventBus
+                .PublishAsync(
+                    new ContainerInventory
+                    {
+                        ObservedAtUtc = snapshot.TimestampUtc,
+                        Containers = [.. containers.Select(ToContractInfo)],
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+
             await PublishTransitionsAsync(containers, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -120,28 +136,17 @@ public sealed class DockerPoller : ModuleBackgroundService
         }
 
         var now = DateTimeOffset.UtcNow;
-        var changes = new List<ContainerChanged>();
+        var changes = new List<(ContainerChangeKind Kind, DockerContainer Container, ContainerState? Previous)>();
 
         foreach (var (id, container) in current)
         {
             if (!previous.TryGetValue(id, out var before))
             {
-                changes.Add(new ContainerChanged
-                {
-                    Kind = ContainerChangeKind.Added,
-                    Container = container,
-                    ObservedAtUtc = now,
-                });
+                changes.Add((ContainerChangeKind.Added, container, null));
             }
             else if (before.State != container.State)
             {
-                changes.Add(new ContainerChanged
-                {
-                    Kind = ContainerChangeKind.StateChanged,
-                    Container = container,
-                    PreviousState = before.State,
-                    ObservedAtUtc = now,
-                });
+                changes.Add((ContainerChangeKind.StateChanged, container, before.State));
             }
         }
 
@@ -149,29 +154,51 @@ public sealed class DockerPoller : ModuleBackgroundService
         {
             if (!current.ContainsKey(id))
             {
-                changes.Add(new ContainerChanged
-                {
-                    Kind = ContainerChangeKind.Removed,
-                    Container = container,
-                    ObservedAtUtc = now,
-                });
+                changes.Add((ContainerChangeKind.Removed, container, null));
             }
         }
 
-        foreach (var change in changes)
+        foreach (var (kind, container, previousState) in changes)
         {
             Logger.LogInformation(
                 "Container {Name} ({ShortId}): {Kind}{Transition}",
-                change.Container.Name,
-                change.Container.ShortId,
-                change.Kind,
-                change.Kind == ContainerChangeKind.StateChanged
-                    ? $" {change.PreviousState} -> {change.Container.State}"
-                    : string.Empty);
+                container.Name,
+                container.ShortId,
+                kind,
+                kind == ContainerChangeKind.StateChanged ? $" {previousState} -> {container.State}" : string.Empty);
 
-            await _eventBus.PublishAsync(change, cancellationToken).ConfigureAwait(false);
+            await _eventBus
+                .PublishAsync(
+                    new ContainerChanged
+                    {
+                        Kind = kind,
+                        Container = ToContractInfo(container),
+                        ObservedAtUtc = now,
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
     }
+
+    /// <summary>
+    /// Narrows the module's rich model down to the published contract. Everything not crossing
+    /// the module boundary — health, exit codes, restart policy, networks — stops here.
+    /// </summary>
+    private static ContainerInfo ToContractInfo(DockerContainer container) => new()
+    {
+        Id = container.Id,
+        Name = container.Name,
+        Image = container.Image,
+        IsRunning = container.IsRunning,
+        Ports = [.. container.Ports.Select(p => new PublishedPort
+        {
+            ContainerPort = p.ContainerPort,
+            HostPort = p.HostPort,
+            HostIp = p.HostIp,
+            Protocol = p.Protocol,
+        })],
+        Labels = container.Labels,
+    };
 
     /// <summary>
     /// Counts container references so the UI can mark what is safe to remove. Computed here

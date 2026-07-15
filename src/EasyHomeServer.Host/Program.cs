@@ -31,6 +31,7 @@ var options = builder.Configuration
 
 var modulesPath = Path.GetFullPath(options.ModulesPath, builder.Environment.ContentRootPath);
 var dataPath = Path.GetFullPath(options.DataPath, builder.Environment.ContentRootPath);
+var sharedPath = Path.GetFullPath(options.SharedPath, builder.Environment.ContentRootPath);
 Directory.CreateDirectory(dataPath);
 
 // Modules must be discovered before the container is built, because each one contributes
@@ -38,6 +39,11 @@ Directory.CreateDirectory(dataPath);
 // pipeline exists.
 using var bootstrapLoggerFactory = LoggerFactory.Create(logging =>
     logging.AddConfiguration(builder.Configuration.GetSection("Logging")).AddConsole());
+
+// Strictly before the module scan: a contract assembly must be in the default context before
+// any module resolves it, or each module gets a private copy and cross-module events silently
+// stop matching. See SharedAssemblyLoader.
+new SharedAssemblyLoader(bootstrapLoggerFactory.CreateLogger<SharedAssemblyLoader>()).Load(sharedPath);
 
 var bootstrapLogger = bootstrapLoggerFactory.CreateLogger<ModuleLoader>();
 var scanned = new ModuleLoader(bootstrapLogger).Load(modulesPath);

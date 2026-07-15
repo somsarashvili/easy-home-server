@@ -1,0 +1,24 @@
+#!/bin/sh
+# Runs after a contract package is unpacked and configured.
+set -e
+
+case "$1" in
+  configure)
+    # The host loads shared contracts into its default assembly load context at startup, before
+    # the module scan. There is no way to add one to a running process, so a newly installed
+    # contract only takes effect on restart. Modules installed after this will pull their own
+    # restart in; restarting here covers the case where the contract is upgraded on its own.
+    if [ -d /run/systemd/system ] && systemctl is-active --quiet easyhomeserver.service; then
+      systemctl restart easyhomeserver.service || true
+    fi
+    ;;
+
+  abort-upgrade | abort-remove | abort-deconfigure) ;;
+
+  *)
+    echo "postinst called with unknown argument '$1'" >&2
+    exit 1
+    ;;
+esac
+
+exit 0

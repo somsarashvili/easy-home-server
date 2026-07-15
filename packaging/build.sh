@@ -82,6 +82,20 @@ fi
 
 # These functions return the built .deb path on stdout, so every progress message they emit
 # must go to stderr or it would be captured as part of the return value.
+# Major version of a contract, from Directory.Build.props — the single source of truth. It is the
+# N in the easyhomeserver-contracts-<id>-N virtual package, mirroring how the SDK works.
+contract_major_of() {
+  local id="$1"
+  local pascal
+  pascal="$(tr '[:lower:]' '[:upper:]' <<< "${id:0:1}")${id:1}"
+
+  local version
+  version="$(sed -n "s/.*<EasyHomeServerContracts${pascal}AssemblyVersion[^>]*>\([0-9]*\).*/\1/p" \
+    "${REPO_ROOT}/Directory.Build.props" | head -1)"
+
+  echo "${version:-1}"
+}
+
 build_deb() {
   local package_dir="$1"
   local package_name="$2"
@@ -132,9 +146,10 @@ build_host() {
     -p:GenerateDocumentationFile=false \
     --nologo --verbosity quiet
 
-  # The modules directory must exist and be listed by the host package: the module packages
-  # drop into it, and the host scans it on every start whether or not anything is installed.
-  mkdir -p "${app_dir}/modules"
+  # Both directories must exist and be owned by the host package: the module and contract
+  # packages drop into them, and the host scans both on every start whether or not anything is
+  # installed.
+  mkdir -p "${app_dir}/modules" "${app_dir}/shared"
 
   install -m 0644 "${PACKAGING}/easyhomeserver.service" "${stage}/lib/systemd/system/easyhomeserver.service"
   chmod 0755 "${app_dir}/EasyHomeServer.Host"
@@ -190,6 +205,83 @@ EOF
 }
 
 # ---------------------------------------------------------------------------------------------
+# Contract packages
+#
+# One per shared event contract. Its own package rather than being folded into the publishing
+# module's, because a subscriber depends on the *contract*, not on the publisher being installed:
+# the Avahi module needs the Docker contract to compile and load, and works fine (receiving
+# nothing) on a machine with no Docker module. The versioned virtual package
+# easyhomeserver-contracts-<id>-N is what keeps publisher and subscriber on the same schema.
+# ---------------------------------------------------------------------------------------------
+build_contract() {
+  local project_dir="$1"
+  local project_name
+  project_name="$(basename "${project_dir}")"
+
+  local contract_id
+  contract_id="$(echo "${project_name#EasyHomeServer.Contracts.}" | tr '[:upper:]' '[:lower:]')"
+
+  local stage="${STAGE_ROOT}/contract-${contract_id}"
+  local shared_dir="${stage}/usr/lib/easyhomeserver/shared"
+
+  echo "==> Contract ${contract_id}: publishing" >&2
+  mkdir -p "${shared_dir}" "${stage}/DEBIAN" "${stage}/usr/share/doc/easyhomeserver-contracts-${contract_id}"
+
+  dotnet publish "${project_dir}/${project_name}.csproj" \
+    --configuration Release \
+    --output "${shared_dir}" \
+    -p:DebugType=none \
+    -p:GenerateDocumentationFile=false \
+    --nologo --verbosity quiet
+
+  # The whole point of a contract assembly is that it is types and nothing else. Anything it
+  # dragged in would be loaded into the host's default context and shared with every module.
+  local extra
+  extra="$(find "${shared_dir}" -maxdepth 1 -name '*.dll' ! -name "${project_name}.dll" | wc -l | tr -d ' ')"
+
+  if [[ "${extra}" != "0" ]]; then
+    echo "    ERROR: the contract published ${extra} dependency assembly(ies); it must be types only." >&2
+    find "${shared_dir}" -maxdepth 1 -name '*.dll' ! -name "${project_name}.dll" -exec basename {} \; >&2
+    exit 1
+  fi
+
+  local contract_major
+  contract_major="$(contract_major_of "${contract_id}")"
+
+  cat > "${stage}/usr/share/doc/easyhomeserver-contracts-${contract_id}/copyright" <<'EOF'
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: easyhomeserver
+EOF
+
+  local installed_kb
+  installed_kb="$(du -sk "${stage}" | cut -f1)"
+
+  cat > "${stage}/DEBIAN/control" <<EOF
+Package: easyhomeserver-contracts-${contract_id}
+Version: ${VERSION}
+Section: admin
+Priority: optional
+Architecture: all
+Maintainer: ${MAINTAINER}
+Installed-Size: ${installed_kb}
+Depends: easyhomeserver-sdk-${SDK_CONTRACT_MAJOR}
+Provides: easyhomeserver-contracts-${contract_id}-${contract_major}
+Description: ${contract_id} event contract for EasyHomeServer
+ Shared event types allowing modules to communicate without referencing each
+ other. Installed into /usr/lib/easyhomeserver/shared and loaded by the host
+ into its default assembly load context before any module, so that publisher
+ and subscriber see one type rather than two identical-looking ones.
+ .
+ Installed automatically as a dependency of the modules that use it.
+EOF
+
+  install -m 0755 "${PACKAGING}/contract/postinst" "${stage}/DEBIAN/postinst"
+
+  echo "==> Contract ${contract_id}: building package" >&2
+  build_deb "${stage}" "easyhomeserver-contracts-${contract_id}" "all"
+}
+
+# ---------------------------------------------------------------------------------------------
 # Module packages
 # ---------------------------------------------------------------------------------------------
 build_module() {
@@ -219,15 +311,17 @@ build_module() {
     -p:GenerateDocumentationFile=false \
     --nologo --verbosity quiet
 
-  # The host supplies these at runtime. A copy here loads into the plugin context as a distinct
-  # type: IModule discovery finds nothing and MudBlazor components render against a theme
-  # provider the host cannot see. Both fail quietly, so fail loudly here instead.
+  # The host supplies all of these at runtime. A copy here loads into the plugin context as a
+  # distinct type, and every failure that causes is silent: IModule discovery finds nothing,
+  # MudBlazor renders against a theme provider the host cannot see, and cross-module events stop
+  # matching. Nothing throws. So fail the build instead.
   local leaked=0
-  for forbidden in EasyHomeServer.Sdk.dll MudBlazor.dll; do
-    if [[ -f "${module_dir}/${forbidden}" ]]; then
-      echo "    ERROR: ${forbidden} was published into the module package." >&2
+  for pattern in EasyHomeServer.Sdk.dll MudBlazor.dll 'EasyHomeServer.Contracts.*.dll'; do
+    for leaked_path in "${module_dir}"/${pattern}; do
+      [[ -e "${leaked_path}" ]] || continue
+      echo "    ERROR: $(basename "${leaked_path}") was published into the module package." >&2
       leaked=1
-    fi
+    done
   done
 
   if [[ "${leaked}" -eq 1 ]]; then
@@ -243,6 +337,24 @@ EOF
   local installed_kb
   installed_kb="$(du -sk "${stage}" | cut -f1)"
 
+  # Dependencies on shared contracts are read out of the project file rather than maintained by
+  # hand here: the .csproj is where a module declares what it needs, and a list duplicated in the
+  # build script is a list that goes stale.
+  local contract_depends=""
+
+  while read -r contract_project; do
+    [[ -n "${contract_project}" ]] || continue
+
+    local contract_id
+    contract_id="$(echo "${contract_project#EasyHomeServer.Contracts.}" | tr '[:upper:]' '[:lower:]')"
+    contract_depends="${contract_depends}, easyhomeserver-contracts-${contract_id}-$(contract_major_of "${contract_id}")"
+  done < <(grep -oE 'contracts/EasyHomeServer\.Contracts\.[A-Za-z0-9]+/' "${project_dir}/${project_name}.csproj" \
+             | sed 's|contracts/||; s|/$||' | sort -u)
+
+  if [[ -n "${contract_depends}" ]]; then
+    echo "    contracts:${contract_depends#,}" >&2
+  fi
+
   # Architecture: all — the module is IL, so one package serves amd64 and arm64 alike. The
   # dependency on the versioned SDK contract, not on a host version, is what lets host and
   # modules be upgraded independently as long as the contract holds.
@@ -254,7 +366,7 @@ Priority: optional
 Architecture: all
 Maintainer: ${MAINTAINER}
 Installed-Size: ${installed_kb}
-Depends: easyhomeserver-sdk-${SDK_CONTRACT_MAJOR}
+Depends: easyhomeserver-sdk-${SDK_CONTRACT_MAJOR}${contract_depends}
 Description: ${module_id} module for EasyHomeServer
  Adds the ${module_id} module to the EasyHomeServer management tool.
  .
@@ -274,6 +386,15 @@ EOF
 
 BUILT=()
 BUILT+=("$(build_host)")
+
+# Contracts before modules: a module's control file declares a dependency on the contract's
+# virtual package, so the contract must exist to install alongside it.
+for project_dir in "${REPO_ROOT}"/src/contracts/*/; do
+  project_dir="${project_dir%/}"
+  [[ -d "${project_dir}" ]] || continue
+
+  BUILT+=("$(build_contract "${project_dir}")")
+done
 
 for project_dir in "${REPO_ROOT}"/src/modules/*/; do
   project_dir="${project_dir%/}"

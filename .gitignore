@@ -6,6 +6,7 @@ artifacts/
 
 # Modules published for local development by scripts/dev-publish-modules.sh.
 /modules/
+/modules-shared/
 
 # Local host state: SQLite database and data-protection keys. See appsettings.Development.json.
 /.devdata/

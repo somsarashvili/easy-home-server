@@ -24,4 +24,13 @@
     <EasyHomeServerVersion Condition="'$(EasyHomeServerVersion)' == ''">0.1.0</EasyHomeServerVersion>
   </PropertyGroup>
 
+  <!--
+    Contract assemblies shared between modules are versioned independently of the SDK: the Docker
+    event contract can change without forcing every module to be rebuilt against a new SDK, and
+    vice versa. Each maps to its own easyhomeserver-contracts-*-N virtual package.
+  -->
+  <PropertyGroup>
+    <EasyHomeServerContractsDockerAssemblyVersion Condition="'$(EasyHomeServerContractsDockerAssemblyVersion)' == ''">1.0.0.0</EasyHomeServerContractsDockerAssemblyVersion>
+  </PropertyGroup>
+
 </Project>

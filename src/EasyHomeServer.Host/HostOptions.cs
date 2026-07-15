@@ -22,4 +22,12 @@ public sealed class EasyHomeServerOptions
     /// </summary>
     [Required]
     public string DataPath { get; set; } = "data";
+
+    /// <summary>
+    /// Directory of shared contract assemblies, loaded into the default load context before the
+    /// module scan so that modules publishing and consuming the same event type see the same
+    /// type. Production default is <c>/usr/lib/easyhomeserver/shared</c>.
+    /// </summary>
+    [Required]
+    public string SharedPath { get; set; } = "shared";
 }

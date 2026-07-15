@@ -13,6 +13,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODULES_SRC="${REPO_ROOT}/src/modules"
+CONTRACTS_SRC="${REPO_ROOT}/src/contracts"
+SHARED_TARGET="${REPO_ROOT}/modules-shared"
 
 # Repo root, deliberately NOT src/EasyHomeServer.Host/modules: the host's own source lives in
 # src/EasyHomeServer.Host/Modules/, and on a case-insensitive filesystem (macOS by default)
@@ -60,15 +62,17 @@ publish_module() {
     --verbosity quiet \
     ${extra_args[@]+"${extra_args[@]}"}
 
-  # The SDK and MudBlazor are supplied by the host at runtime. If a copy lands here it loads
-  # into the plugin context as a different type and module discovery silently finds nothing,
-  # so treat it as a build failure rather than shipping a subtly broken module.
+  # The SDK, MudBlazor and the shared contract assemblies are all supplied by the host at
+  # runtime. A copy here loads into the plugin context as a *different* type, and both failures
+  # that causes are silent: IModule discovery finds nothing, and cross-module events stop
+  # matching. Neither throws, so catch it here rather than at 3am.
   local leaked=0
-  for forbidden in EasyHomeServer.Sdk.dll MudBlazor.dll; do
-    if [[ -f "${target}/${forbidden}" ]]; then
-      echo "    ERROR: ${forbidden} was published into the module directory." >&2
+  for pattern in EasyHomeServer.Sdk.dll MudBlazor.dll 'EasyHomeServer.Contracts.*.dll'; do
+    for leaked_path in "${target}"/${pattern}; do
+      [[ -e "${leaked_path}" ]] || continue
+      echo "    ERROR: $(basename "${leaked_path}") was published into the module directory." >&2
       leaked=1
-    fi
+    done
   done
 
   if [[ "${leaked}" -eq 1 ]]; then
@@ -79,9 +83,37 @@ publish_module() {
   echo "    $(find "${target}" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ') assembly(ies) published"
 }
 
+# Shared event contracts. Always published, regardless of which module was asked for: the host
+# loads these into its default context before the module scan, and a module referencing a
+# contract that is not there simply fails to load.
+publish_contracts() {
+  [[ -d "${CONTRACTS_SRC}" ]] || return 0
+
+  rm -rf "${SHARED_TARGET}"
+  mkdir -p "${SHARED_TARGET}"
+
+  for project_dir in "${CONTRACTS_SRC}"/*/; do
+    project_dir="${project_dir%/}"
+    [[ -d "${project_dir}" ]] || continue
+
+    local project_name
+    project_name="$(basename "${project_dir}")"
+
+    echo "==> ${project_name} -> modules-shared/"
+
+    dotnet publish "${project_dir}/${project_name}.csproj" \
+      --configuration "${CONFIGURATION}" \
+      --output "${SHARED_TARGET}" \
+      --nologo \
+      --verbosity quiet
+  done
+}
+
 main() {
   local requested="${1:-}"
   local found=0
+
+  publish_contracts
 
   for project_dir in "${MODULES_SRC}"/*/; do
     project_dir="${project_dir%/}"

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>EasyHomeServer.Contracts.Docker</RootNamespace>
+    <AssemblyName>EasyHomeServer.Contracts.Docker</AssemblyName>
+    <Version>$(EasyHomeServerVersion)</Version>
+
+    <!--
+      Versioned like the SDK, and for the same reason: this assembly's identity is a contract
+      between two independently installed packages. A module built against version 1 and a module
+      built against version 2 must not silently exchange half-matching events.
+    -->
+    <AssemblyVersion>$(EasyHomeServerContractsDockerAssemblyVersion)</AssemblyVersion>
+    <FileVersion>$(EasyHomeServerContractsDockerAssemblyVersion)</FileVersion>
+  </PropertyGroup>
+
+  <!--
+    No dependencies, deliberately — not even the SDK. This assembly is loaded into the host's
+    default load context and shared by every module that references it, so anything it drags in
+    becomes shared too. Types only.
+  -->
+
+</Project>

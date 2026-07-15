@@ -17,6 +17,15 @@
     <ProjectReference Include="../../EasyHomeServer.Sdk/EasyHomeServer.Sdk.csproj"
                       Private="false"
                       ExcludeAssets="runtime" />
+    <!--
+      Same rule as the SDK, and for a sharper reason: the host loads this into the default
+      context from /usr/lib/easyhomeserver/shared so that this module and its subscribers see one
+      type. A private copy here would make ContainerInventory a different type from the one the
+      subscriber awaits, and the event bus would drop every message without an error.
+    -->
+    <ProjectReference Include="../../contracts/EasyHomeServer.Contracts.Docker/EasyHomeServer.Contracts.Docker.csproj"
+                      Private="false"
+                      ExcludeAssets="runtime" />
   </ItemGroup>
 
   <ItemGroup>

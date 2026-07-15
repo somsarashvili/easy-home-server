@@ -3,6 +3,9 @@
     <Project Path="src/EasyHomeServer.Sdk/EasyHomeServer.Sdk.csproj" />
     <Project Path="src/EasyHomeServer.Host/EasyHomeServer.Host.csproj" />
   </Folder>
+  <Folder Name="/src/contracts/">
+    <Project Path="src/contracts/EasyHomeServer.Contracts.Docker/EasyHomeServer.Contracts.Docker.csproj" />
+  </Folder>
   <Folder Name="/src/modules/">
     <Project Path="src/modules/EasyHomeServer.Modules.SystemInfo/EasyHomeServer.Modules.SystemInfo.csproj" />
     <Project Path="src/modules/EasyHomeServer.Modules.Docker/EasyHomeServer.Modules.Docker.csproj" />
