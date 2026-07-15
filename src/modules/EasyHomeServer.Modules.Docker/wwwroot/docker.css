@@ -123,3 +123,82 @@
 .dk-warn-list li + li {
     margin-top: 0.35rem;
 }
+
+/* Sparkline (see Components/Sparkline.razor on why it is duplicated from SystemInfo). */
+.dk-sparkline {
+    display: block;
+    width: 100%;
+    height: 28px;
+}
+
+.dk-sparkline-empty {
+    border-bottom: 1px dashed var(--mud-palette-divider);
+    opacity: 0.5;
+}
+
+.dk-sparkline-line {
+    fill: none;
+    stroke: var(--mud-palette-primary);
+    stroke-width: 1.5;
+    vector-effect: non-scaling-stroke;
+    stroke-linejoin: round;
+}
+
+.dk-sparkline-fill {
+    fill: var(--mud-palette-primary);
+    fill-opacity: 0.12;
+    stroke: none;
+}
+
+.si-metric {
+    font-variant-numeric: tabular-nums;
+}
+
+/* Detail table: a label column and a value column, not a grid. */
+.dk-details td:first-child {
+    width: 11rem;
+    color: var(--mud-palette-text-secondary);
+    vertical-align: top;
+    white-space: nowrap;
+}
+
+.dk-details td {
+    white-space: normal;
+}
+
+.dk-label-row {
+    font-size: 0.78rem;
+    line-height: 1.6;
+    word-break: break-all;
+}
+
+/* Raw inspect output. Tall and scrollable: it is ~10 KB and meant for reading and copying, not
+   for fitting on screen. */
+.dk-json {
+    max-height: 60vh;
+    margin: 0;
+    padding: 1rem;
+    overflow: auto;
+    border-radius: 6px;
+    background: var(--mud-palette-background-gray);
+    color: var(--mud-palette-text-primary);
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.75rem;
+    line-height: 1.5;
+    white-space: pre;
+}
+
+/* Container names that open the detail page. Not styled as a blue link: in a dense table that
+   would turn every row into a stripe of colour. It reads as the name it is, and reveals itself
+   on hover. */
+.dk-link {
+    color: var(--mud-palette-text-primary);
+    font-weight: 600;
+    text-decoration: none;
+    border-bottom: 1px dotted var(--mud-palette-text-secondary);
+}
+
+.dk-link:hover {
+    color: var(--mud-palette-primary);
+    border-bottom-color: var(--mud-palette-primary);
+}

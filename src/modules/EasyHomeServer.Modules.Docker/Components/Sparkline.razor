@@ -1,0 +1,73 @@
+@* Inline SVG rather than MudChart: a full chart component's axes, tooltips and legend are all
+   cost with no benefit at 60x24 pixels.
+
+   Duplicated from the SystemInfo module rather than shared. Modules are separate plugins in
+   separate load contexts, so a component cannot cross between them; the only ways to share it
+   would be to put it in the SDK — making a sparkline a permanent compatibility commitment for
+   every future module — or to add a whole package for one file. Sixty lines is cheaper. *@
+
+@if (Values.Length >= 2)
+{
+    <svg class="dk-sparkline" viewBox="@($"0 0 {Width} {Height}")" preserveAspectRatio="none" aria-hidden="true">
+        <polyline class="dk-sparkline-fill" points="@FillPoints" />
+        <polyline class="dk-sparkline-line" points="@LinePoints" />
+    </svg>
+}
+else
+{
+    <div class="dk-sparkline dk-sparkline-empty"></div>
+}
+
+@code {
+    private const int Width = 100;
+    private const int Height = 28;
+
+    /// <summary>The series to plot, oldest first.</summary>
+    [Parameter]
+    public double[] Values { get; set; } = [];
+
+    /// <summary>
+    /// Upper bound of the y axis. Leave null to scale to the data; set it (to 100 for a
+    /// percentage) to keep the line comparable across renders instead of rescaling every tick.
+    /// </summary>
+    [Parameter]
+    public double? Max { get; set; }
+
+    private string LinePoints => BuildPoints(closed: false);
+
+    private string FillPoints => BuildPoints(closed: true);
+
+    private string BuildPoints(bool closed)
+    {
+        var max = Max ?? Values.Max();
+
+        // A flat-zero series would divide by zero; give it a nominal ceiling so it draws along
+        // the bottom instead of vanishing.
+        if (max <= 0)
+        {
+            max = 1;
+        }
+
+        var step = (double)Width / (Values.Length - 1);
+        var points = new List<string>(Values.Length + 2);
+
+        if (closed)
+        {
+            points.Add($"0,{Height}");
+        }
+
+        for (var i = 0; i < Values.Length; i++)
+        {
+            var x = i * step;
+            var y = Height - Math.Clamp(Values[i] / max, 0, 1) * Height;
+            points.Add(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{x:0.##},{y:0.##}"));
+        }
+
+        if (closed)
+        {
+            points.Add($"{Width},{Height}");
+        }
+
+        return string.Join(' ', points);
+    }
+}

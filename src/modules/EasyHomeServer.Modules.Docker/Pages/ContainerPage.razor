@@ -1,0 +1,558 @@
+@page "/docker/container/{Id}"
+@attribute [Authorize]
+@implements IDisposable
+
+@inject IEventBus EventBus
+@inject DockerPoller Poller
+@inject DockerCli Cli
+@inject DockerOptions Options
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+@inject IJSRuntime JsRuntime
+
+<link rel="stylesheet" href="_content/EasyHomeServer.Modules.Docker/docker.css" />
+
+<PageTitle>@(_container?.Name ?? "Container")</PageTitle>
+
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text" Size="Size.Small"
+           Href="/docker" Class="mb-3">
+    All containers
+</MudButton>
+
+@if (_container is null)
+{
+    @* Reachable by pasting a URL, and by leaving the tab open while the container is removed. *@
+    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined">
+        <MudText Typo="Typo.subtitle2">No such container</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mt-1">
+            Nothing matches <code>@Id</code>. It may have been removed.
+        </MudText>
+    </MudAlert>
+}
+else
+{
+    <div class="d-flex align-center justify-space-between mb-5">
+        <div>
+            <div class="d-flex align-center">
+                <MudText Typo="Typo.h4">@_container.Name</MudText>
+                <MudChip T="string" Size="Size.Small" Color="@StateColor(_container)" Variant="Variant.Filled" Class="ml-3">
+                    @StateLabel(_container)
+                </MudChip>
+            </div>
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                @_container.Image &middot; <span class="dk-mono">@_container.ShortId</span>
+                @if (_container.ComposeProject is { } project)
+                {
+                    <span> &middot; part of @project</span>
+                }
+            </MudText>
+        </div>
+
+        @if (Options.AllowContainerControl)
+        {
+            <div class="d-flex align-center">
+                @if (_busy)
+                {
+                    <MudProgressCircular Color="Color.Primary" Size="Size.Small" Indeterminate="true" Class="mr-3" />
+                }
+
+                @if (_container.IsRunning)
+                {
+                    <MudButton StartIcon="@Icons.Material.Filled.RestartAlt" Variant="Variant.Outlined" Size="Size.Small"
+                               Disabled="_busy" Class="mr-2"
+                               OnClick="@(() => Run("Restarted", () => Cli.RestartAsync(_container.Id, 10)))">
+                        Restart
+                    </MudButton>
+                    <MudButton StartIcon="@Icons.Material.Filled.Stop" Variant="Variant.Outlined" Color="Color.Warning"
+                               Size="Size.Small" Disabled="_busy"
+                               OnClick="@(() => Run("Stopped", () => Cli.StopAsync(_container.Id, 10)))">
+                        Stop
+                    </MudButton>
+                }
+                else
+                {
+                    <MudButton StartIcon="@Icons.Material.Filled.PlayArrow" Variant="Variant.Outlined" Color="Color.Success"
+                               Size="Size.Small" Disabled="_busy"
+                               OnClick="@(() => Run("Started", () => Cli.StartAsync(_container.Id)))">
+                        Start
+                    </MudButton>
+                }
+            </div>
+        }
+    </div>
+
+    @* ActivePanelIndexChanged, so the inspect output is fetched when its tab is first opened
+       rather than on page load: MudTabs only renders the active panel, and there is no point
+       spawning a docker process for ten kilobytes of JSON nobody has asked to see. *@
+    <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" Class="dk-tabs"
+             ActivePanelIndex="_activeTab" ActivePanelIndexChanged="OnTabChanged">
+
+        <MudTabPanel Text="Stats" Icon="@Icons.Material.Filled.ShowChart">
+            @if (!_container.IsRunning)
+            {
+                @* A stopped container has no stats to take — the numbers come from the running
+                   process, not from Docker's records. *@
+                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
+                    It is not running, so there is nothing to measure.
+                </MudAlert>
+            }
+            else if (_stats is null)
+            {
+                <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="my-4" />
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                    Sampling… a CPU figure is a rate, so this takes a moment.
+                </MudText>
+            }
+            else
+            {
+                <MudGrid>
+                    <MudItem xs="12" md="6">
+                        <MudPaper Class="pa-4 h-100" Elevation="0">
+                            <div class="d-flex align-center justify-space-between">
+                                <MudText Typo="Typo.subtitle1">CPU</MudText>
+                                <MudText Typo="Typo.h5" Class="si-metric">@_stats.CpuPercent.ToString("0.0")%</MudText>
+                            </div>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                Across all cores, so it can exceed 100%.
+                            </MudText>
+                            <div class="mt-2">
+                                <Sparkline Values="@_cpuHistory.ToArray()" />
+                            </div>
+                        </MudPaper>
+                    </MudItem>
+
+                    <MudItem xs="12" md="6">
+                        <MudPaper Class="pa-4 h-100" Elevation="0">
+                            <div class="d-flex align-center justify-space-between">
+                                <MudText Typo="Typo.subtitle1">Memory</MudText>
+                                <MudText Typo="Typo.h5" Class="si-metric">@_stats.MemoryPercent.ToString("0.0")%</MudText>
+                            </div>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">@_stats.MemoryUsage</MudText>
+                            <MudProgressLinear Color="@UsageColor(_stats.MemoryPercent)" Value="@_stats.MemoryPercent"
+                                               Size="Size.Large" Class="mt-3" />
+                            <div class="mt-2">
+                                <Sparkline Values="@_memoryHistory.ToArray()" Max="100" />
+                            </div>
+                        </MudPaper>
+                    </MudItem>
+
+                    <MudItem xs="12" sm="4">
+                        <MudPaper Class="pa-4" Elevation="0">
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">Network I/O</MudText>
+                            <MudText Typo="Typo.h6" Class="si-metric">@_stats.NetworkIo</MudText>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">received / sent, since it started</MudText>
+                        </MudPaper>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudPaper Class="pa-4" Elevation="0">
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">Block I/O</MudText>
+                            <MudText Typo="Typo.h6" Class="si-metric">@_stats.BlockIo</MudText>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">read / written to disk</MudText>
+                        </MudPaper>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudPaper Class="pa-4" Elevation="0">
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">Processes</MudText>
+                            <MudText Typo="Typo.h6" Class="si-metric">@_stats.Processes</MudText>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">threads and processes inside</MudText>
+                        </MudPaper>
+                    </MudItem>
+                </MudGrid>
+
+                <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-4">
+                    Sampled every @StatsIntervalSeconds s while this page is open &middot; last at
+                    @_stats.TimestampUtc.ToLocalTime().ToString("HH:mm:ss")
+                </MudText>
+            }
+        </MudTabPanel>
+
+        <MudTabPanel Text="Details" Icon="@Icons.Material.Filled.Info">
+            <MudSimpleTable Dense="true" Elevation="0" Class="dk-table dk-details">
+                <tbody>
+                    <tr><td>Id</td><td class="dk-mono">@_container.Id</td></tr>
+                    <tr><td>Image</td><td>@_container.Image</td></tr>
+                    <tr><td>State</td><td>@StateLabel(_container)</td></tr>
+                    @if (_container.Health is { } health)
+                    {
+                        <tr><td>Health</td><td>@health</td></tr>
+                    }
+                    <tr><td>Restart policy</td><td>@_container.RestartPolicy</td></tr>
+                    <tr><td>Created</td><td>@Format.Ago(_container.CreatedAt)</td></tr>
+                    <tr>
+                        <td>Started</td>
+                        <td>@(_container.Uptime is { } uptime ? $"{Format.Duration(uptime)} ago" : "—")</td>
+                    </tr>
+                    @if (_container.State == ContainerState.Exited)
+                    {
+                        <tr><td>Exit code</td><td>@(_container.ExitCode?.ToString() ?? "—")</td></tr>
+                        <tr><td>Finished</td><td>@Format.Ago(_container.FinishedAt)</td></tr>
+                    }
+                    <tr>
+                        <td>Ports</td>
+                        <td>
+                            @if (_container.Ports.Length == 0)
+                            {
+                                <span class="mud-text-secondary">
+                                    @(_container.LanAddress is not null ? "none published — it answers on its own address" : "none published")
+                                </span>
+                            }
+                            else
+                            {
+                                @foreach (var port in _container.Ports)
+                                {
+                                    <span class="dk-port dk-port-plain">@port.HostPort:@port.ContainerPort/@port.Protocol</span>
+                                }
+                            }
+                        </td>
+                    </tr>
+                    @if (_container.LanAddress is { } lan)
+                    {
+                        <tr>
+                            <td>LAN address</td>
+                            <td>
+                                <span class="dk-mono">@lan</span>
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">
+                                    Its own address on the network. This server cannot reach it unless the
+                                    network has a host shim.
+                                </MudText>
+                            </td>
+                        </tr>
+                    }
+                    <tr>
+                        <td>Networks</td>
+                        <td>@(_container.Networks.Length > 0 ? string.Join(", ", _container.Networks) : "—")</td>
+                    </tr>
+                    <tr>
+                        <td>Volumes</td>
+                        <td>@(_container.VolumeMounts.Length > 0 ? string.Join(", ", _container.VolumeMounts) : "—")</td>
+                    </tr>
+                    @if (_container.Labels.Count > 0)
+                    {
+                        <tr>
+                            <td>Labels</td>
+                            <td>
+                                @foreach (var (key, value) in _container.Labels.OrderBy(l => l.Key, StringComparer.Ordinal))
+                                {
+                                    <div class="dk-mono dk-label-row">@key<span class="mud-text-secondary"> = @value</span></div>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </MudTabPanel>
+
+        <MudTabPanel Text="Logs" Icon="@Icons.Material.Filled.Article">
+            <div class="d-flex justify-end mb-2">
+                <MudButton StartIcon="@Icons.Material.Filled.Refresh" Variant="Variant.Outlined" Size="Size.Small"
+                           Disabled="_loadingLogs" OnClick="LoadLogsAsync">
+                    Refresh
+                </MudButton>
+            </div>
+
+            @if (_loadingLogs)
+            {
+                <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="my-2" />
+            }
+
+            <pre class="dk-logs">@_logs</pre>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                Last @Options.LogTailLines lines. Timestamps are the daemon's, in UTC.
+            </MudText>
+        </MudTabPanel>
+
+        <MudTabPanel Text="Inspect" Icon="@Icons.Material.Filled.DataObject">
+            <div class="d-flex align-center justify-space-between mb-2">
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                    Exactly what <code>docker inspect</code> returns — the whole truth, including everything
+                    this page leaves out.
+                </MudText>
+                <div>
+                    <MudButton StartIcon="@Icons.Material.Filled.Refresh" Variant="Variant.Outlined" Size="Size.Small"
+                               Disabled="_loadingInspect" OnClick="LoadInspectAsync" Class="mr-2">
+                        Refresh
+                    </MudButton>
+                    <MudButton StartIcon="@Icons.Material.Filled.ContentCopy" Variant="Variant.Outlined" Size="Size.Small"
+                               Disabled="@(_inspect is null)" OnClick="CopyInspect">
+                        Copy
+                    </MudButton>
+                </div>
+            </div>
+
+            @if (_loadingInspect)
+            {
+                <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="my-2" />
+            }
+
+            @* Env vars live in here and routinely hold passwords. This is a single-admin tool and
+               anyone signed in could run docker inspect anyway, so it is shown — but it is worth
+               knowing before pasting it into a bug report. *@
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                Contains the container's environment, which often holds passwords and API keys. Check before
+                sharing it.
+            </MudAlert>
+
+            <pre class="dk-json">@_inspect</pre>
+        </MudTabPanel>
+
+    </MudTabs>
+}
+
+@code {
+    /// <summary>Container id from the route. A short id is enough — Docker matches on a prefix.</summary>
+    [Parameter]
+    public string Id { get; set; } = string.Empty;
+
+    private const int StatsIntervalSeconds = 3;
+    private const int HistoryLength = 40;
+
+    private IDisposable? _subscription;
+    private CancellationTokenSource? _statsCts;
+    private DockerContainer? _container;
+    private ContainerStats? _stats;
+    private string _logs = "Loading…";
+    private string? _inspect;
+    private bool _loadingLogs;
+    private bool _loadingInspect;
+    private bool _busy;
+
+    // Kept on the component, not in a shared buffer: this history only exists while someone is
+    // looking, and starting it fresh on each visit is the honest thing to show.
+    private readonly Queue<double> _cpuHistory = new();
+    private readonly Queue<double> _memoryHistory = new();
+
+    protected override void OnInitialized()
+    {
+        Resolve();
+
+        // Follows the shared poll for state changes, so the header and buttons stay correct
+        // without this page polling for them separately.
+        _subscription = EventBus.Subscribe<DockerSnapshot>((_, _) =>
+        {
+            var wasRunning = _container?.IsRunning;
+            Resolve();
+
+            // Starting or stopping changes whether there is anything to sample.
+            if (_container?.IsRunning != wasRunning)
+            {
+                RestartStatsLoop();
+            }
+
+            return InvokeAsync(StateHasChanged);
+        });
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Navigating between containers reuses the component, so everything keyed to the old one
+        // has to go.
+        Resolve();
+        _stats = null;
+        _inspect = null;
+        _cpuHistory.Clear();
+        _memoryHistory.Clear();
+
+        RestartStatsLoop();
+
+        await LoadLogsAsync();
+    }
+
+    /// <summary>Finds the container in the latest snapshot, by id prefix or exact name.</summary>
+    private void Resolve()
+    {
+        var containers = Poller.Latest?.Containers ?? [];
+
+        _container = containers.FirstOrDefault(c => c.Id.StartsWith(Id, StringComparison.OrdinalIgnoreCase))
+                     ?? containers.FirstOrDefault(c => c.Name.Equals(Id, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Samples stats on a loop while the page is open.
+    /// </summary>
+    /// <remarks>
+    /// Its own loop rather than the module's poller: <c>docker stats</c> costs about a second and
+    /// a half, so it is only worth paying while someone is watching. The loop stops when the page
+    /// is disposed.
+    /// </remarks>
+    private void RestartStatsLoop()
+    {
+        _statsCts?.Cancel();
+        _statsCts?.Dispose();
+        _statsCts = null;
+
+        if (_container is not { IsRunning: true })
+        {
+            _stats = null;
+
+            return;
+        }
+
+        var cts = new CancellationTokenSource();
+        _statsCts = cts;
+
+        _ = SampleLoopAsync(_container.Id, cts.Token);
+    }
+
+    private async Task SampleLoopAsync(string containerId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                var stats = await Cli.GetStatsAsync(containerId, cancellationToken);
+
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                if (stats is not null)
+                {
+                    _stats = stats;
+                    Push(_cpuHistory, stats.CpuPercent);
+                    Push(_memoryHistory, stats.MemoryPercent);
+                    await InvokeAsync(StateHasChanged);
+                }
+
+                await Task.Delay(TimeSpan.FromSeconds(StatsIntervalSeconds), cancellationToken);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Page closed or navigated away.
+        }
+    }
+
+    private static void Push(Queue<double> history, double value)
+    {
+        history.Enqueue(value);
+
+        while (history.Count > HistoryLength)
+        {
+            history.Dequeue();
+        }
+    }
+
+    private async Task LoadLogsAsync()
+    {
+        if (_container is null)
+        {
+            return;
+        }
+
+        _loadingLogs = true;
+
+        try
+        {
+            _logs = await Cli.GetLogsAsync(_container.Id, Options.LogTailLines);
+        }
+        catch (Exception ex)
+        {
+            _logs = $"Could not read logs: {ex.Message}";
+        }
+        finally
+        {
+            _loadingLogs = false;
+        }
+    }
+
+    private async Task LoadInspectAsync()
+    {
+        if (_container is null)
+        {
+            return;
+        }
+
+        _loadingInspect = true;
+
+        try
+        {
+            _inspect = await Cli.InspectRawAsync(_container.Id) ?? "(nothing returned)";
+        }
+        finally
+        {
+            _loadingInspect = false;
+        }
+    }
+
+    /// <summary>Index of the Inspect panel, in declaration order: Stats, Details, Logs, Inspect.</summary>
+    private const int InspectTabIndex = 3;
+
+    private int _activeTab;
+
+    private async Task OnTabChanged(int index)
+    {
+        _activeTab = index;
+
+        if (index == InspectTabIndex && _inspect is null && !_loadingInspect)
+        {
+            await LoadInspectAsync();
+        }
+    }
+
+    private async Task CopyInspect()
+    {
+        if (_inspect is null)
+        {
+            return;
+        }
+
+        await JsRuntime.InvokeVoidAsync("navigator.clipboard.writeText", _inspect);
+        Snackbar.Add("Inspect JSON copied.", Severity.Success);
+    }
+
+    private static Color UsageColor(double percent) => percent switch
+    {
+        >= 90 => Color.Error,
+        >= 75 => Color.Warning,
+        _ => Color.Primary,
+    };
+
+    private static Color StateColor(DockerContainer container) => container.State switch
+    {
+        ContainerState.Running when container.Health == "unhealthy" => Color.Warning,
+        ContainerState.Running => Color.Success,
+        ContainerState.Restarting => Color.Warning,
+        ContainerState.Paused => Color.Info,
+        ContainerState.Exited when container.ExitCode is not (null or 0) => Color.Error,
+        ContainerState.Dead => Color.Error,
+        _ => Color.Default,
+    };
+
+    private static string StateLabel(DockerContainer container) => container switch
+    {
+        { State: ContainerState.Exited, ExitCode: > 0 and var code } => $"exited ({code})",
+        { State: ContainerState.Running, Health: "unhealthy" } => "unhealthy",
+        { State: ContainerState.Running, Health: "starting" } => "starting",
+        _ => container.State.ToString().ToLowerInvariant(),
+    };
+
+    private async Task Run(string pastTense, Func<Task<DockerActionResult>> action)
+    {
+        _busy = true;
+
+        try
+        {
+            var result = await action();
+
+            Snackbar.Add(
+                result.Succeeded ? $"{pastTense} {_container!.Name}." : result.Message,
+                result.Succeeded ? Severity.Success : Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        _subscription?.Dispose();
+
+        // Without this the sampling loop outlives the page and keeps spawning a docker process
+        // every few seconds for a container nobody is looking at.
+        _statsCts?.Cancel();
+        _statsCts?.Dispose();
+    }
+}

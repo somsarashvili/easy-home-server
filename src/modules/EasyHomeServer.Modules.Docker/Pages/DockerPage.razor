@@ -222,7 +222,16 @@ else
                                         var first = service.Containers.FirstOrDefault();
 
                                         <tr>
-                                            <td><b>@service.Name</b></td>
+                                            <td>
+                                                @if (first is not null)
+                                                {
+                                                    <a class="dk-link" href="@($"/docker/container/{first.ShortId}")">@service.Name</a>
+                                                }
+                                                else
+                                                {
+                                                    <b>@service.Name</b>
+                                                }
+                                            </td>
                                             <td class="mud-text-secondary">@service.Image</td>
                                             <td>
                                                 <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
@@ -308,7 +317,7 @@ else
                             <tr>
                                 <td>
                                     <div class="d-flex align-center">
-                                        <b>@container.Name</b>
+                                        <a class="dk-link" href="@($"/docker/container/{container.ShortId}")">@container.Name</a>
                                         @if (container.ComposeProject is { } project)
                                         {
                                             <MudTooltip Text="@($"Part of the '{project}' compose project")">

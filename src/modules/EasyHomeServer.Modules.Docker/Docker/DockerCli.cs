@@ -174,6 +174,108 @@ public sealed class DockerCli(
         return combined.Length == 0 ? "(no output)" : combined;
     }
 
+    /// <summary>
+    /// Takes a live resource sample for one container.
+    /// </summary>
+    /// <remarks>
+    /// <c>--no-stream</c> makes it return one sample rather than watching forever, but it still
+    /// takes about a second and a half: a CPU percentage is a rate, so Docker samples twice with a
+    /// pause between. That cost is why this is called from the page looking at it rather than from
+    /// the poll loop.
+    /// </remarks>
+    public async Task<ContainerStats?> GetStatsAsync(string id, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+
+        var output = await RunAsync(["stats", "--no-stream", "--format", "json", id], cancellationToken)
+            .ConfigureAwait(false);
+
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return null;
+        }
+
+        try
+        {
+            // One JSON object per line; asking for a single container yields exactly one.
+            var line = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault();
+
+            if (line is null)
+            {
+                return null;
+            }
+
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+
+            string Read(string name) =>
+                root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+                    ? value.GetString() ?? string.Empty
+                    : string.Empty;
+
+            return new ContainerStats
+            {
+                CpuPercent = ContainerStats.ParsePercent(Read("CPUPerc")),
+                MemoryPercent = ContainerStats.ParsePercent(Read("MemPerc")),
+                MemoryUsage = Read("MemUsage"),
+                NetworkIo = Read("NetIO"),
+                BlockIo = Read("BlockIO"),
+                Processes = int.TryParse(Read("PIDs"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var pids)
+                    ? pids
+                    : 0,
+                TimestampUtc = DateTimeOffset.UtcNow,
+            };
+        }
+        catch (JsonException ex)
+        {
+            logger.LogWarning(ex, "Could not parse stats for {ContainerId}.", id);
+
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Returns Docker's own inspect output for a container, formatted for reading.
+    /// </summary>
+    /// <remarks>
+    /// The unabridged truth, as the daemon reports it — everything this module's own model leaves
+    /// out, and the thing worth pasting into a bug report. Re-indented rather than passed through:
+    /// docker's output is already indented, but round-tripping it guarantees what is shown is
+    /// valid JSON rather than whatever happened to come back.
+    /// </remarks>
+    public async Task<string?> InspectRawAsync(string id, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+
+        var output = await RunAsync(["inspect", "--type", "container", id], cancellationToken).ConfigureAwait(false);
+
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(output);
+
+            // inspect always returns an array; unwrap the single element, which is what anyone
+            // reading it actually wants.
+            var element = document.RootElement.ValueKind == JsonValueKind.Array
+                          && document.RootElement.GetArrayLength() == 1
+                ? document.RootElement[0]
+                : document.RootElement;
+
+            return JsonSerializer.Serialize(element, new JsonSerializerOptions { WriteIndented = true });
+        }
+        catch (JsonException ex)
+        {
+            logger.LogWarning(ex, "docker inspect returned unparseable output for {ContainerId}.", id);
+
+            return output;
+        }
+    }
+
     /// <summary>Starts a container.</summary>
     public Task<DockerActionResult> StartAsync(string id, CancellationToken cancellationToken = default) =>
         ActionAsync(["start", id], $"start {id}", cancellationToken);
