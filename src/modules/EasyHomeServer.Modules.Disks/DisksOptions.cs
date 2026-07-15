@@ -28,6 +28,26 @@ public sealed class DisksOptions
     /// <summary>The fstab to manage. Configurable so it can be pointed elsewhere for a test.</summary>
     public string FstabPath { get; set; } = "/etc/fstab";
 
+    /// <summary>Where snapraid.conf lives. Its absence is how this module decides there is no array.</summary>
+    public string SnapRaidConfigPath { get; set; } = "/etc/snapraid.conf";
+
+    private double _snapRaidPollIntervalSeconds = 600;
+
+    /// <summary>
+    /// How often to re-read the SnapRAID array, in seconds.
+    /// </summary>
+    /// <remarks>
+    /// Far slower than the disk poll, because <c>snapraid status</c> is not a cheap read: it loads
+    /// the whole content file, which on a real array is a few hundred MiB, and it takes the lock
+    /// that a sync needs. Running it every ten seconds would fight the hourly cron sync for the
+    /// array and read a large file continuously, to watch numbers that move once an hour.
+    /// </remarks>
+    public double SnapRaidPollIntervalSeconds
+    {
+        get => _snapRaidPollIntervalSeconds;
+        set => _snapRaidPollIntervalSeconds = Math.Clamp(value, 60, 86400);
+    }
+
     /// <summary>
     /// Whether the UI may mount, unmount and edit fstab.
     /// </summary>

@@ -1,0 +1,348 @@
+@using EasyHomeServer.Modules.Disks.SnapRaid
+@using EasyHomeServer.Modules.Disks.MergerFs
+
+@* SnapRAID: what parity protects, and whether it is currently keeping up. *@
+
+@if (Reading is null)
+{
+    <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="my-4" />
+}
+else if (Reading.Outcome == SnapRaidOutcome.NotInstalled)
+{
+    <MudAlert Severity="Severity.Normal" Variant="Variant.Outlined" Class="mt-2">
+        <MudText Typo="Typo.subtitle2">SnapRAID is not installed</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mt-1">
+            SnapRAID computes parity across disks that each keep their own filesystem, so a failed
+            disk can be rebuilt while the others stay readable on their own.
+            Install <code>snapraid</code> to use it.
+        </MudText>
+    </MudAlert>
+}
+else if (Reading.Outcome == SnapRaidOutcome.NotConfigured)
+{
+    <MudAlert Severity="Severity.Normal" Variant="Variant.Outlined" Class="mt-2">
+        <MudText Typo="Typo.subtitle2">No array configured</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mt-1">
+            SnapRAID is installed, but there is no <code>@ConfigPath</code>, so nothing is protected.
+        </MudText>
+    </MudAlert>
+}
+else
+{
+    <div class="d-flex align-center justify-space-between mb-3">
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">
+            @if (_status is not null)
+            {
+                @($"Read at {_status.TimestampUtc.ToLocalTime():HH:mm:ss}")
+            }
+            @* Says why the numbers are not live, before anyone assumes they are. *@
+            <span> &middot; re-read every @(IntervalMinutes.ToString("0.#", Culture))&nbsp;min, because
+                reading the array is expensive and takes the lock a sync needs.</span>
+        </MudText>
+
+        <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Refresh"
+                   Disabled="_refreshing"
+                   OnClick="RefreshAsync">
+            @(_refreshing ? "Reading…" : "Read now")
+        </MudButton>
+    </div>
+
+    @if (Reading.Outcome == SnapRaidOutcome.Busy)
+    {
+        @*
+            Expected, not exceptional: a sync holds a lock over the whole array and the machine
+            this targets syncs hourly from cron. Say the numbers are stale, keep showing them.
+        *@
+        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+            SnapRAID is busy — a sync or scrub is running now, so it would not answer.
+            @if (_status is not null)
+            {
+                @($"Showing the reading from {_status.TimestampUtc.ToLocalTime():HH:mm:ss}.")
+            }
+        </MudAlert>
+    }
+
+    @if (Reading.Outcome == SnapRaidOutcome.Failed)
+    {
+        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+            <MudText Typo="Typo.subtitle2">Could not read the array</MudText>
+            <MudText Typo="Typo.body2" Class="mt-1">@(Reading.Message ?? "snapraid status failed.")</MudText>
+        </MudAlert>
+    }
+
+    @if (_status is not null)
+    {
+        @if (_status.ErrorCount > 0)
+        {
+            @*
+                Silent damage: the array serves reads and syncs normally with these present, and
+                nothing surfaces them but this report.
+            *@
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">
+                <MudText Typo="Typo.subtitle2">
+                    @_status.ErrorCount block@(_status.ErrorCount == 1 ? "" : "s") @(_status.ErrorCount == 1 ? "is" : "are") damaged
+                </MudText>
+                <MudText Typo="Typo.body2" Class="mt-1">
+                    A previous scrub found @_status.ErrorCount bad block@(_status.ErrorCount == 1 ? "" : "s").
+                    Nothing else reports this: the array keeps serving reads and syncing normally.
+                    Repair with <code>snapraid -e fix</code>, then scrub to confirm.
+                </MudText>
+            </MudAlert>
+        }
+
+        @* A grid, not flex-grow: the cards hold sentences of very different lengths, and letting
+           them size to their content gives three columns of three different widths. *@
+        <MudGrid Spacing="4" Class="mb-4">
+            <MudItem xs="12" md="4">
+            <MudPaper Class="pa-3 h-100" Elevation="0">
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">Protection</MudText>
+                <div class="d-flex align-center mt-1">
+                    <MudIcon Icon="@(_status.IsFullySynced ? Icons.Material.Filled.VerifiedUser : Icons.Material.Filled.GppMaybe)"
+                             Color="@(_status.IsFullySynced ? Color.Success : Color.Warning)" Class="mr-2" />
+                    <MudText Typo="Typo.h6">@(_status.IsFullySynced ? "Fully synced" : "Not fully synced")</MudText>
+                </div>
+                <MudText Typo="Typo.body2" Class="mud-text-secondary mt-1">
+                    @if (_status.IsFullySynced)
+                    {
+                        @($"Parity covers every file. {ParityCountText} could fail without data loss.")
+                    }
+                    else if (_status.SyncProgressPercent is { } percent)
+                    {
+                        @($"An interrupted sync reached {percent}%. Files changed since the last sync are not protected yet.")
+                    }
+                    else
+                    {
+                        @("Files have changed since the last sync, and those changes are not protected yet.")
+                    }
+                </MudText>
+            </MudPaper>
+            </MudItem>
+
+            <MudItem xs="12" md="4">
+            <MudPaper Class="pa-3 h-100" Elevation="0">
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">Scrub</MudText>
+                <div class="d-flex align-center mt-1">
+                    <MudIcon Icon="@Icons.Material.Filled.FactCheck" Class="mr-2 mud-text-secondary" />
+                    <MudText Typo="Typo.h6">
+                        @(_status.NotScrubbedPercent is { } notScrubbed ? $"{100 - notScrubbed}% verified" : "unknown")
+                    </MudText>
+                </div>
+                <MudText Typo="Typo.body2" Class="mud-text-secondary mt-1">
+                    @if (_status.OldestScrubDays is { } oldest)
+                    {
+                        @($"Oldest block checked {oldest} day{(oldest == 1 ? "" : "s")} ago, median {_status.MedianScrubDays ?? 0}. ")
+                    }
+                    @("A scrub re-reads data and compares it to parity, which is how silent corruption is found.")
+                </MudText>
+            </MudPaper>
+            </MudItem>
+
+            <MudItem xs="12" md="4">
+            <MudPaper Class="pa-3 h-100" Elevation="0">
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">Array</MudText>
+                <div class="d-flex align-center mt-1">
+                    <MudIcon Icon="@Icons.Material.Filled.Inventory2" Class="mr-2 mud-text-secondary" />
+                    <MudText Typo="Typo.h6">@_status.TotalFiles.ToString("N0", Culture) files</MudText>
+                </div>
+                <MudText Typo="Typo.body2" Class="mud-text-secondary mt-1">
+                    @_status.Disks.Length data disk@(_status.Disks.Length == 1 ? "" : "s"),
+                    @(Reading?.Config?.ParityCount ?? 0) parity.
+                </MudText>
+            </MudPaper>
+            </MudItem>
+        </MudGrid>
+    }
+
+    @if (UnprotectedBranches.Any())
+    {
+        @*
+            mergerfs and SnapRAID are configured in different files and neither validates the
+            other, so a branch in one and not the other is invisible from both.
+
+            Info rather than a warning, because there are two reasons for it and they are opposite.
+            A disk added to the pool and forgotten in snapraid.conf is a mistake. An SSD staging
+            branch that a mover empties on a timer is the standard cache-tier setup and is meant to
+            be here. This cannot tell them apart, and a red alert that is wrong half the time on
+            the machine it was built for would be ignored within a week. State the fact; the reader
+            knows which one they built.
+        *@
+        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mb-3">
+            <MudText Typo="Typo.subtitle2">
+                @UnprotectedBranches.Count() pool branch@(UnprotectedBranches.Count() == 1 ? "" : "es")
+                @(UnprotectedBranches.Count() == 1 ? "is" : "are") outside the array
+            </MudText>
+            <MudText Typo="Typo.body2" Class="mt-1">
+                @string.Join(", ", UnprotectedBranches) —
+                served by the pool, but not a data disk in <code>@ConfigPath</code>, so parity does
+                not cover what sits there. Expected for a cache branch that a mover empties onto
+                the data disks; a mistake if it was meant to be protected.
+            </MudText>
+        </MudAlert>
+    }
+
+    @if (_status is { Disks.Length: > 0 })
+    {
+        <MudSimpleTable Dense="true" Hover="true" Elevation="0" Class="dsk-table mb-4">
+            <thead>
+            <tr>
+                <th>Disk</th>
+                <th>Path</th>
+                <th class="dsk-numeric">Files</th>
+                <th class="dsk-numeric">Fragmented</th>
+                <th class="dsk-numeric">Used</th>
+                <th class="dsk-numeric">Free</th>
+                <th class="dsk-numeric">Use</th>
+            </tr>
+            </thead>
+            <tbody>
+            @foreach (var disk in _status.Disks)
+            {
+                <tr>
+                    <td class="dsk-mono">@disk.Name</td>
+                    <td class="dsk-mono mud-text-secondary">@(PathFor(disk.Name) ?? "—")</td>
+                    <td class="dsk-numeric">@disk.Files.ToString("N0", Culture)</td>
+                    <td class="dsk-numeric">
+                        @disk.FragmentedFiles.ToString("N0", Culture)
+                        @if (disk.ExcessFragments > 0)
+                        {
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary ml-1">
+                                (+@disk.ExcessFragments.ToString("N0", Culture))
+                            </MudText>
+                        }
+                    </td>
+                    <td class="dsk-numeric">@disk.UsedGb.ToString("N0", Culture) GB</td>
+                    <td class="dsk-numeric">@disk.FreeGb.ToString("N0", Culture) GB</td>
+                    <td class="dsk-numeric">@disk.UsePercent%</td>
+                </tr>
+            }
+            </tbody>
+        </MudSimpleTable>
+    }
+
+    @if (Reading.Config is { } config)
+    {
+        <MudExpansionPanels Elevation="0" Class="mb-2">
+            <MudExpansionPanel Text="@($"Configuration ({ConfigPath})")">
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">Parity</MudText>
+                @foreach (var parity in config.ParityFiles)
+                {
+                    <MudText Typo="Typo.body2" Class="dsk-mono">@parity</MudText>
+                }
+
+                <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-3">Data</MudText>
+                @foreach (var disk in config.DataDisks)
+                {
+                    <MudText Typo="Typo.body2" Class="dsk-mono">@disk.Name &rarr; @disk.Path</MudText>
+                }
+
+                <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-3">
+                    Content files (SnapRAID's index of what it protects)
+                </MudText>
+                @foreach (var file in config.ContentFiles)
+                {
+                    <MudText Typo="Typo.body2" Class="dsk-mono">@file</MudText>
+                }
+            </MudExpansionPanel>
+        </MudExpansionPanels>
+    }
+}
+
+@code {
+    /// <summary>The latest read of the array, or null before the first one.</summary>
+    [Parameter]
+    public SnapRaidReading? Reading { get; set; }
+
+    /// <summary>
+    /// The last reading that produced a report, so a busy tick does not blank the page.
+    /// </summary>
+    [Parameter]
+    public SnapRaidStatus? LastGoodStatus { get; set; }
+
+    /// <summary>The pools, to cross-check what is protected against what is served.</summary>
+    [Parameter]
+    public ImmutableArray<MergerFsPool> Pools { get; set; } = [];
+
+    /// <summary>Where snapraid.conf lives, quoted in the messages that mention it.</summary>
+    [Parameter]
+    public string ConfigPath { get; set; } = "/etc/snapraid.conf";
+
+    /// <summary>Re-reads the array now.</summary>
+    [Parameter]
+    public EventCallback OnRefresh { get; set; }
+
+    /// <summary>How often the array is re-read, for the line explaining why it is not live.</summary>
+    [Parameter]
+    public double IntervalMinutes { get; set; } = 10;
+
+    private static readonly CultureInfo Culture = CultureInfo.InvariantCulture;
+
+    private bool _refreshing;
+
+    /// <summary>
+    /// Reads the array on demand.
+    /// </summary>
+    /// <remarks>
+    /// Can take a minute on a real array, and can come back busy if a sync holds the lock, so the
+    /// button has to stay disabled for the whole call rather than fire and forget.
+    /// </remarks>
+    private async Task RefreshAsync()
+    {
+        _refreshing = true;
+
+        try
+        {
+            await OnRefresh.InvokeAsync();
+        }
+        finally
+        {
+            _refreshing = false;
+        }
+    }
+
+    /// <summary>The report to render: this reading's, or the last one that had numbers.</summary>
+    private SnapRaidStatus? _status => Reading?.Status ?? LastGoodStatus;
+
+    private string ParityCountText =>
+        Reading?.Config?.ParityCount switch
+        {
+            null or 0 => "No disk",
+            1 => "1 disk",
+            var count => $"{count} disks",
+        };
+
+    /// <summary>The path snapraid.conf gives for one of its disk names.</summary>
+    private string? PathFor(string name) =>
+        Reading?.Config?.DataDisks.FirstOrDefault(disk =>
+            string.Equals(disk.Name, name, StringComparison.Ordinal))?.Path;
+
+    /// <summary>
+    /// Pool branches that no SnapRAID data disk covers.
+    /// </summary>
+    /// <remarks>
+    /// A read-only or parity branch is not expected to be a data disk, so neither is counted.
+    /// Only a writable branch holding files nothing protects is worth raising.
+    /// </remarks>
+    private IEnumerable<string> UnprotectedBranches
+    {
+        get
+        {
+            if (Reading?.Config is not { DataDisks.Length: > 0 } config)
+            {
+                return [];
+            }
+
+            var protectedPaths = config.DataDisks
+                .Select(disk => disk.Path)
+                .ToHashSet(StringComparer.Ordinal);
+
+            return Pools
+                .SelectMany(pool => pool.Branches)
+                .Where(branch => branch.Mode == BranchMode.ReadWrite && branch.IsPresent)
+                .Select(branch => branch.Path)
+                .Where(path => !protectedPaths.Contains(path))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(path => path, StringComparer.Ordinal);
+        }
+    }
+}

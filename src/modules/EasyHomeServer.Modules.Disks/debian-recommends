@@ -1,0 +1,13 @@
+# Debian packages this module can use but does not need, one per line. Read by packaging/build.sh
+# and added to the module's Recommends, which apt installs by default and an administrator can
+# decline.
+#
+# snapraid is not a hard dependency: the Parity tab explains what SnapRAID is and how to get it
+# when it is absent, and a machine with a single disk has no array to protect and no reason to
+# carry it.
+snapraid
+
+# mergerfs is listed for the same reason, and needs even less: pools are read through the kernel's
+# mount table and mergerfs's own control file, never by running the binary. A machine that has a
+# pool already has mergerfs; this only helps someone who wants to build one.
+mergerfs

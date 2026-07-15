@@ -370,6 +370,22 @@ EOF
     fi
   fi
 
+  # Packages the module uses when present but works without. apt installs Recommends by default,
+  # so this is the right home for a tool the module explains rather than requires — the alternative
+  # is forcing snapraid onto a single-disk machine that has no array to protect.
+  local system_recommends=""
+
+  if [[ -f "${project_dir}/debian-recommends" ]]; then
+    while read -r package; do
+      [[ -z "${package}" || "${package}" == \#* ]] && continue
+      system_recommends="${system_recommends}, ${package}"
+    done < "${project_dir}/debian-recommends"
+
+    if [[ -n "${system_recommends}" ]]; then
+      echo "    recommends:${system_recommends#,}" >&2
+    fi
+  fi
+
   # Architecture: all — the module is IL, so one package serves amd64 and arm64 alike. The
   # dependency on the versioned SDK contract, not on a host version, is what lets host and
   # modules be upgraded independently as long as the contract holds.
@@ -381,7 +397,8 @@ Priority: optional
 Architecture: all
 Maintainer: ${MAINTAINER}
 Installed-Size: ${installed_kb}
-Depends: easyhomeserver-sdk-${SDK_CONTRACT_MAJOR}${contract_depends}${system_depends}
+Depends: easyhomeserver-sdk-${SDK_CONTRACT_MAJOR}${contract_depends}${system_depends}${system_recommends:+
+Recommends: ${system_recommends#, }}
 Description: ${module_id} module for EasyHomeServer
  Adds the ${module_id} module to the EasyHomeServer management tool.
  .

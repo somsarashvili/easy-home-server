@@ -4,6 +4,7 @@
 
 @inject IEventBus EventBus
 @inject DiskPoller Poller
+@inject SnapRaidPoller SnapRaid
 @inject MountManager Mounts
 @inject SmartReader Smart
 @inject DisksOptions Options
@@ -249,6 +250,16 @@ else
                      BadgeColor="Color.Default">
             <PoolsPanel Snapshot="_snapshot" />
         </MudTabPanel>
+
+        <MudTabPanel Text="Parity" Icon="@Icons.Material.Filled.Shield"
+                     BadgeData="@(ParityBadge)" BadgeColor="Color.Error">
+            <ParityPanel Reading="SnapRaid.Latest"
+                         LastGoodStatus="SnapRaid.LastGoodStatus"
+                         Pools="_snapshot.Pools"
+                         ConfigPath="@Options.SnapRaidConfigPath"
+                         IntervalMinutes="@(Options.SnapRaidPollIntervalSeconds / 60)"
+                         OnRefresh="@(() => SnapRaid.RefreshAsync())" />
+        </MudTabPanel>
     </MudTabs>
 
     <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-4">
@@ -259,6 +270,7 @@ else
 
 @code {
     private IDisposable? _subscription;
+    private IDisposable? _snapRaidSubscription;
     private DiskSnapshot? _snapshot;
     private bool _busy;
 
@@ -271,7 +283,20 @@ else
 
             return InvokeAsync(StateHasChanged);
         });
+
+        // The array is read on its own, far slower, clock; this only redraws when it reports.
+        _snapRaidSubscription = EventBus.Subscribe<SnapRaidReading>((_, _) => InvokeAsync(StateHasChanged));
     }
+
+    /// <summary>
+    /// A count on the Parity tab, only when something is wrong.
+    /// </summary>
+    /// <remarks>
+    /// Damaged blocks are the one thing here that nothing else surfaces, so they get the badge. An
+    /// unsynced array is normal between syncs and would make the badge permanent and ignorable.
+    /// </remarks>
+    private int? ParityBadge =>
+        SnapRaid.LastGoodStatus is { ErrorCount: > 0 } status ? status.ErrorCount : null;
 
     private static Color UsageColor(double percent) => percent switch
     {
@@ -365,5 +390,6 @@ else
     public void Dispose()
     {
         _subscription?.Dispose();
+        _snapRaidSubscription?.Dispose();
     }
 }
