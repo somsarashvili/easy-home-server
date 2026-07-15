@@ -30,6 +30,7 @@ public sealed class AvahiModule : IModule
 
         services.AddSingleton(options);
         services.AddSingleton<AvahiServiceStore>();
+        services.AddSingleton<AvahiHostsFile>();
         services.AddSingleton<AvahiBrowser>();
 
         // One reconciler owns every advertisement this module writes. See the note in

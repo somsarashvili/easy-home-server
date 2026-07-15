@@ -52,10 +52,42 @@ internal static class DockerJson
                 ? GetString(policy, "Name") ?? "no"
                 : "no",
             Ports = ParsePorts(networkSettings),
-            Networks = ParseNetworks(networkSettings),
+            NetworkAttachments = ParseNetworkAttachments(networkSettings),
+            ExposedPorts = ParseExposedPorts(config),
             VolumeMounts = ParseVolumeMounts(element),
             Labels = ParseLabels(config),
         };
+    }
+
+    /// <summary>
+    /// Reads the ports the image declares with EXPOSE, from <c>Config.ExposedPorts</c>, which is
+    /// keyed like <c>"80/tcp"</c>. UDP is skipped: nothing here advertises or links a UDP port.
+    /// </summary>
+    private static ImmutableArray<int> ParseExposedPorts(JsonElement config)
+    {
+        if (config.ValueKind != JsonValueKind.Object
+            || !config.TryGetProperty("ExposedPorts", out var exposed)
+            || exposed.ValueKind != JsonValueKind.Object)
+        {
+            return [];
+        }
+
+        var builder = ImmutableArray.CreateBuilder<int>();
+
+        foreach (var entry in exposed.EnumerateObject())
+        {
+            var slash = entry.Name.IndexOf('/');
+            var portText = slash > 0 ? entry.Name[..slash] : entry.Name;
+            var protocol = slash > 0 ? entry.Name[(slash + 1)..] : "tcp";
+
+            if (protocol == "tcp"
+                && int.TryParse(portText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var port))
+            {
+                builder.Add(port);
+            }
+        }
+
+        return [.. builder.Distinct().Order()];
     }
 
     /// <summary>
@@ -160,7 +192,12 @@ internal static class DockerJson
             .OrderBy(p => p.HostPort)];
     }
 
-    private static ImmutableArray<string> ParseNetworks(JsonElement networkSettings)
+    /// <summary>
+    /// Reads <c>NetworkSettings.Networks</c>, which maps each attached network's name to the
+    /// address and MAC the container holds on it. The address is what makes a macvlan container
+    /// reachable in its own right, so it is carried rather than only the network's name.
+    /// </summary>
+    private static ImmutableArray<NetworkAttachment> ParseNetworkAttachments(JsonElement networkSettings)
     {
         if (networkSettings.ValueKind != JsonValueKind.Object
             || !networkSettings.TryGetProperty("Networks", out var networks)
@@ -169,7 +206,21 @@ internal static class DockerJson
             return [];
         }
 
-        return [.. networks.EnumerateObject().Select(n => n.Name).OrderBy(n => n, StringComparer.Ordinal)];
+        var builder = ImmutableArray.CreateBuilder<NetworkAttachment>();
+
+        foreach (var network in networks.EnumerateObject())
+        {
+            builder.Add(new NetworkAttachment
+            {
+                NetworkName = network.Name,
+
+                // Empty for drivers that assign no address of their own, such as host.
+                IpAddress = GetString(network.Value, "IPAddress") ?? string.Empty,
+                MacAddress = GetString(network.Value, "MacAddress"),
+            });
+        }
+
+        return [.. builder.OrderBy(a => a.NetworkName, StringComparer.Ordinal)];
     }
 
     private static ImmutableDictionary<string, string> ParseLabels(JsonElement config)

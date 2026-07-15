@@ -47,7 +47,7 @@
                     <tr>
                         <th>Name</th>
                         <th>Type</th>
-                        <th class="av-numeric">Port</th>
+                        <th>Reachable at</th>
                         <th>Source</th>
                     </tr>
                 </thead>
@@ -59,7 +59,23 @@
                                would be confusing, so it is rendered as the real hostname. *@
                             <td><b>@service.DisplayName.Replace("%h", _hostName)</b></td>
                             <td class="mud-text-secondary av-mono">@service.ServiceType</td>
-                            <td class="av-numeric">@service.Port</td>
+                            <td class="av-mono">
+                                @* The reachable address, which is the question the operator is
+                                   actually asking. A macvlan container answers on its own name and
+                                   port; everything else answers on the host's. *@
+                                @if (service.HostName is { Length: > 0 })
+                                {
+                                    <span>@service.HostName<span class="mud-text-secondary">:@service.Port</span></span>
+                                    <MudTooltip Text="@($"Has its own address on the LAN ({service.HostAddress}). This server cannot reach it — macvlan isolation.")">
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                                 Color="Color.Tertiary" Class="ml-2 av-chip">own IP</MudChip>
+                                    </MudTooltip>
+                                }
+                                else
+                                {
+                                    <span>@(_hostName).local<span class="mud-text-secondary">:@service.Port</span></span>
+                                }
+                            </td>
                             <td>
                                 @if (service.Origin == ServiceOrigin.Host)
                                 {

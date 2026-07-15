@@ -20,8 +20,22 @@ public sealed record ServiceDefinition
     /// <summary>DNS-SD service type, for example <c>_http._tcp</c>.</summary>
     public required string ServiceType { get; init; }
 
-    /// <summary>Port on this host that the service answers on.</summary>
+    /// <summary>Port the service answers on.</summary>
     public required int Port { get; init; }
+
+    /// <summary>
+    /// Host that provides the service, when it is not this machine. Used for a container holding
+    /// its own address on the LAN: the service lives at its address, not the host's.
+    /// </summary>
+    /// <remarks>
+    /// Must be fully qualified — avahi does not append <c>.local</c> — and must resolve, which is
+    /// why an entry in <see cref="AvahiHostsFile"/> has to accompany it. Null means this machine,
+    /// which avahi resolves itself.
+    /// </remarks>
+    public string? HostName { get; init; }
+
+    /// <summary>The address behind <see cref="HostName"/>, needed for its static host record.</summary>
+    public string? HostAddress { get; init; }
 
     /// <summary>TXT records, published as key=value pairs.</summary>
     public ImmutableDictionary<string, string> TxtRecords { get; init; } =
@@ -74,6 +88,14 @@ public sealed record ServiceDefinition
 
             writer.WriteStartElement("service");
             writer.WriteElementString("type", ServiceType);
+
+            // Must precede <port>: the DTD fixes the order, and avahi rejects the file otherwise
+            // — silently dropping every service in it.
+            if (HostName is { Length: > 0 })
+            {
+                writer.WriteElementString("host-name", HostName);
+            }
+
             writer.WriteElementString("port", Port.ToString(CultureInfo.InvariantCulture));
 
             foreach (var (key, value) in TxtRecords.OrderBy(r => r.Key, StringComparer.Ordinal))

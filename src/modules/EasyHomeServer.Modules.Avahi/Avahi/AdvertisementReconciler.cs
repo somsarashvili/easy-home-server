@@ -37,6 +37,7 @@ public sealed class AdvertisementReconciler : ModuleBackgroundService
 
     private readonly IEventBus _eventBus;
     private readonly AvahiServiceStore _store;
+    private readonly AvahiHostsFile _hosts;
     private readonly AvahiOptions _options;
 
     // Inventories arrive every few seconds; two overlapping passes over the same directory would
@@ -61,12 +62,14 @@ public sealed class AdvertisementReconciler : ModuleBackgroundService
     public AdvertisementReconciler(
         IEventBus eventBus,
         AvahiServiceStore store,
+        AvahiHostsFile hosts,
         AvahiOptions options,
         ILoggerFactory loggerFactory)
         : base(loggerFactory)
     {
         _eventBus = eventBus;
         _store = store;
+        _hosts = hosts;
         _options = options;
     }
 
@@ -151,17 +154,38 @@ public sealed class AdvertisementReconciler : ModuleBackgroundService
 
             Advertised = desired.ToImmutable();
 
+            // Static host records first. A service naming a host-name that does not resolve yet is
+            // published but unreachable, so the address record wants to exist before the service
+            // that depends on it.
+            var hostEntries = Advertised
+                .Where(s => s.HostName is { Length: > 0 } && s.HostAddress is { Length: > 0 })
+                .Select(s => new AvahiHostsFile.HostEntry { Address = s.HostAddress!, HostName = s.HostName! })
+                .DistinctBy(e => e.HostName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var hostsChanged = await _hosts.WriteAsync(hostEntries, cancellationToken).ConfigureAwait(false);
+
             var result = await _store.ReconcileAsync(Advertised, cancellationToken).ConfigureAwait(false);
+
+            // Only when the hosts file actually changed. avahi picks up service files by itself,
+            // but a reload re-announces everything it publishes — doing it every poll would leave
+            // every service on the network flickering.
+            if (hostsChanged)
+            {
+                await _store.ReloadAsync(cancellationToken).ConfigureAwait(false);
+            }
 
             // Logged only when something changed: this runs every few seconds, and a line per
             // pass would bury the journal in "nothing happened".
-            if (!result.NoChanges)
+            if (!result.NoChanges || hostsChanged)
             {
                 Logger.LogInformation(
-                    "Advertisements reconciled: {Written} written, {Removed} withdrawn, {Unchanged} unchanged.",
+                    "Advertisements reconciled: {Written} written, {Removed} withdrawn, {Unchanged} unchanged, "
+                        + "{HostRecords} host record(s).",
                     result.Written,
                     result.Removed,
-                    result.Unchanged);
+                    result.Unchanged,
+                    hostEntries.Count);
             }
         }
         finally

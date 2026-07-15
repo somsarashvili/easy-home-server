@@ -1,0 +1,21 @@
+{
+  "//": [
+    "Pinned away from SDK 10.0.301, whose Razor compiler cannot parse a component inside a code",
+    "block: `@if (x) { <MudText>…</MudText> }` is read as C# rather than markup, producing a",
+    "cascade of nonsense errors ('Severity is a type but is used like a variable') pointing at",
+    "columns that do not correspond to the source. Reproduced on a stock `dotnet new blazor`",
+    "with the built-in <PageTitle>, so it is not specific to this project or to MudBlazor.",
+    "10.0.204 and 10.0.109 are both fine.",
+    "",
+    "rollForward latestPatch keeps 10.0.2xx patches available while refusing 10.0.3xx. Retest and",
+    "raise this once a fixed 10.0.3xx ships.",
+    "",
+    "The pin also exists on principle: without a global.json the toolchain drifts under you. This",
+    "surfaced when a background SDK update landed mid-session and builds that had been passing",
+    "began failing on untouched, already-deployed code."
+  ],
+  "sdk": {
+    "version": "10.0.204",
+    "rollForward": "latestPatch"
+  }
+}

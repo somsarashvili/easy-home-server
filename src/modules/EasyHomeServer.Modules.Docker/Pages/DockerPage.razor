@@ -450,7 +450,7 @@ else
             {
                 <div class="d-flex justify-end mb-3">
                     <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Filled" Color="Color.Primary"
-                               Size="Size.Small" OnClick="@(() => NewVolumeOrNetwork(isNetwork: false))">
+                               Size="Size.Small" OnClick="NewVolume">
                         New volume
                     </MudButton>
                 </div>
@@ -516,7 +516,7 @@ else
             {
                 <div class="d-flex justify-end mb-3">
                     <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Filled" Color="Color.Primary"
-                               Size="Size.Small" OnClick="@(() => NewVolumeOrNetwork(isNetwork: true))">
+                               Size="Size.Small" OnClick="NewNetwork">
                         New network
                     </MudButton>
                 </div>
@@ -716,17 +716,25 @@ else
         }
     }
 
-    private async Task NewVolumeOrNetwork(bool isNetwork)
+    private async Task NewVolume()
     {
-        var parameters = new DialogParameters<CreateVolumeDialog> { { x => x.IsNetwork, isNetwork } };
-
-        var dialog = await DialogService.ShowAsync<CreateVolumeDialog>(
-            isNetwork ? "New network" : "New volume",
-            parameters);
+        var dialog = await DialogService.ShowAsync<CreateVolumeDialog>("New volume");
 
         if (await dialog.Result is { Canceled: false, Data: string name })
         {
-            Snackbar.Add($"Created {name}.", Severity.Success);
+            Snackbar.Add($"Created volume {name}.", Severity.Success);
+        }
+    }
+
+    private async Task NewNetwork()
+    {
+        var dialog = await DialogService.ShowAsync<CreateNetworkDialog>(
+            "New network",
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        if (await dialog.Result is { Canceled: false, Data: string name })
+        {
+            Snackbar.Add($"Created network {name}.", Severity.Success);
         }
     }
 

@@ -3,8 +3,8 @@
 <MudDialog>
     <TitleContent>
         <div class="d-flex align-center">
-            <MudIcon Icon="@Icons.Material.Filled.AddBox" Class="mr-2" />
-            <MudText Typo="Typo.h6">@(IsNetwork ? "New network" : "New volume")</MudText>
+            <MudIcon Icon="@Icons.Material.Filled.Storage" Class="mr-2" />
+            <MudText Typo="Typo.h6">New volume</MudText>
         </div>
     </TitleContent>
 
@@ -14,17 +14,7 @@
                       Immediate="true"
                       Error="@(_error is not null)"
                       ErrorText="@_error"
-                      HelperText="@(IsNetwork
-                          ? "Containers on the same network reach each other by name."
-                          : "Referenced from a container as name:/path/in/container.")" />
-
-        @if (IsNetwork)
-        {
-            <MudSelect @bind-Value="_driver" Label="Driver" Class="mt-4">
-                <MudSelectItem Value="@("bridge")">bridge — the usual choice</MudSelectItem>
-                <MudSelectItem Value="@("macvlan")">macvlan — its own address on the LAN</MudSelectItem>
-            </MudSelect>
-        }
+                      HelperText="Referenced from a container as name:/path/in/container." />
     </DialogContent>
 
     <DialogActions>
@@ -37,18 +27,13 @@
     [CascadingParameter]
     private IMudDialogInstance Dialog { get; set; } = default!;
 
-    /// <summary>True to create a network instead of a volume. The form is otherwise identical.</summary>
-    [Parameter]
-    public bool IsNetwork { get; set; }
-
     private string _name = string.Empty;
-    private string _driver = "bridge";
     private string? _error;
     private bool _busy;
 
     private async Task CreateAsync()
     {
-        // Docker's own rule for volume and network names.
+        // Docker's own rule for volume names.
         if (string.IsNullOrWhiteSpace(_name)
             || !System.Text.RegularExpressions.Regex.IsMatch(_name, "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$"))
         {
@@ -62,9 +47,7 @@
 
         try
         {
-            var result = IsNetwork
-                ? await Cli.CreateNetworkAsync(_name, _driver)
-                : await Cli.CreateVolumeAsync(_name);
+            var result = await Cli.CreateVolumeAsync(_name);
 
             if (!result.Succeeded)
             {

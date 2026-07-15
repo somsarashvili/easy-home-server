@@ -111,3 +111,15 @@
     white-space: pre-wrap;
     word-break: break-word;
 }
+
+/* Consequence list in the macvlan warning. Tight, because it sits inside an alert. */
+.dk-warn-list {
+    margin: 0.5rem 0 0;
+    padding-left: 1.1rem;
+    font-size: 0.8rem;
+    line-height: 1.6;
+}
+
+.dk-warn-list li + li {
+    margin-top: 0.35rem;
+}

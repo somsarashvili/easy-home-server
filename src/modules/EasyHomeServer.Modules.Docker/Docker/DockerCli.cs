@@ -243,12 +243,161 @@ public sealed class DockerCli(ISystemRunner systemRunner, DockerOptions options,
         CancellationToken cancellationToken = default) =>
         ActionAsync(["volume", "create", "--driver", driver, name], $"create volume {name}", cancellationToken);
 
-    /// <summary>Creates a network.</summary>
+    /// <summary>
+    /// Creates a network.
+    /// </summary>
+    /// <remarks>
+    /// A macvlan needs a parent interface, a subnet and a gateway. Docker does not enforce that:
+    /// <c>docker network create -d macvlan foo</c> succeeds and quietly produces a network with a
+    /// private subnet and no parent, whose containers get an address and then find the network
+    /// unreachable. It looks like it worked, which is worse than failing, so <see cref="NetworkSpec"/>
+    /// requires them up front.
+    /// </remarks>
     public Task<DockerActionResult> CreateNetworkAsync(
-        string name,
-        string driver = "bridge",
-        CancellationToken cancellationToken = default) =>
-        ActionAsync(["network", "create", "--driver", driver, name], $"create network {name}", cancellationToken);
+        NetworkSpec spec,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+
+        if (spec.Validate() is { } error)
+        {
+            return Task.FromResult(new DockerActionResult { Succeeded = false, Message = error });
+        }
+
+        var arguments = new List<string> { "network", "create", "--driver", spec.Driver };
+
+        if (spec.IsLanAddressed)
+        {
+            arguments.Add("--subnet");
+            arguments.Add(spec.Subnet);
+            arguments.Add("--gateway");
+            arguments.Add(spec.Gateway);
+
+            // Without an ip-range docker allocates from the whole subnet and will hand a
+            // container an address the router later leases to a phone.
+            if (spec.IpRange is { Length: > 0 })
+            {
+                arguments.Add("--ip-range");
+                arguments.Add(spec.IpRange);
+            }
+
+            arguments.Add("--opt");
+            arguments.Add($"parent={spec.Parent}");
+        }
+
+        arguments.Add(spec.Name);
+
+        return ActionAsync([.. arguments], $"create network {spec.Name}", cancellationToken);
+    }
+
+    /// <summary>
+    /// Lists the host's physical network interfaces, as candidate macvlan parents.
+    /// </summary>
+    /// <remarks>
+    /// Read from <c>/sys/class/net</c>: an interface with a <c>device</c> symlink is backed by
+    /// real hardware, which is exactly what a macvlan parent must be. Everything docker itself
+    /// created — <c>docker0</c>, the <c>veth</c> pairs, <c>lo</c> — has no such link and is
+    /// filtered out, so the list only offers interfaces that can actually work.
+    /// </remarks>
+    public ImmutableArray<string> ListPhysicalInterfaces()
+    {
+        try
+        {
+            if (!Directory.Exists("/sys/class/net"))
+            {
+                return [];
+            }
+
+            return
+            [
+                .. Directory
+                    .GetDirectories("/sys/class/net")
+                    .Where(d => Directory.Exists(Path.Combine(d, "device")))
+                    .Select(Path.GetFileName)
+                    .Where(n => !string.IsNullOrEmpty(n))
+                    .Select(n => n!)
+                    .OrderBy(n => n, StringComparer.Ordinal),
+            ];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning(ex, "Could not list physical interfaces.");
+
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// The address and prefix on an interface, used to prefill a macvlan's subnet.
+    /// </summary>
+    /// <remarks>
+    /// A macvlan's subnet must be the parent's real subnet — containers share that broadcast
+    /// domain. Asking the operator to type it is asking them to get it wrong.
+    /// </remarks>
+    public async Task<(string? Subnet, string? Gateway)> DescribeInterfaceAsync(
+        string interfaceName,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var address = await systemRunner
+                .RunAsync("ip", ["-4", "-oneline", "addr", "show", "dev", interfaceName], cancellationToken)
+                .ConfigureAwait(false);
+
+            string? subnet = null;
+
+            // "2: enp0s1    inet 192.168.64.8/24 brd ..." -> the network 192.168.64.0/24
+            var inet = address.StandardOutput.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var index = Array.IndexOf(inet, "inet");
+
+            if (index >= 0 && index + 1 < inet.Length)
+            {
+                subnet = ToNetworkAddress(inet[index + 1]);
+            }
+
+            var route = await systemRunner
+                .RunAsync("ip", ["-4", "route", "show", "default", "dev", interfaceName], cancellationToken)
+                .ConfigureAwait(false);
+
+            // "default via 192.168.64.1 proto dhcp ..."
+            var fields = route.StandardOutput.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var via = Array.IndexOf(fields, "via");
+            var gateway = via >= 0 && via + 1 < fields.Length ? fields[via + 1] : null;
+
+            return (subnet, gateway);
+        }
+        catch (SystemOperationException ex)
+        {
+            logger.LogWarning(ex, "Could not describe interface {Interface}.", interfaceName);
+
+            return (null, null);
+        }
+    }
+
+    /// <summary>Turns an address with a prefix (192.168.64.8/24) into its network (192.168.64.0/24).</summary>
+    private static string? ToNetworkAddress(string addressWithPrefix)
+    {
+        var parts = addressWithPrefix.Split('/');
+
+        if (parts.Length != 2
+            || !System.Net.IPAddress.TryParse(parts[0], out var address)
+            || !int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var prefix)
+            || address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork
+            || prefix is < 0 or > 32)
+        {
+            return null;
+        }
+
+        var bytes = address.GetAddressBytes();
+        var mask = prefix == 0 ? 0u : uint.MaxValue << (32 - prefix);
+
+        for (var i = 0; i < 4; i++)
+        {
+            bytes[i] &= (byte)((mask >> ((3 - i) * 8)) & 0xFF);
+        }
+
+        return $"{new System.Net.IPAddress(bytes)}/{prefix}";
+    }
 
     /// <summary>
     /// Creates and starts a container.

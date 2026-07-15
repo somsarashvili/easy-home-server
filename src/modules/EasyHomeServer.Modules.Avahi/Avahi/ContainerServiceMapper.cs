@@ -68,6 +68,15 @@ public static class ContainerServiceMapper
             return Skip("Opted in, but not running.");
         }
 
+        // A container with its own address on the LAN (macvlan/ipvlan) is a different shape of
+        // problem: it publishes nothing to the host, so the published-port path below finds
+        // nothing to advertise, and pointing browsers at the host would be wrong anyway — the
+        // host cannot even reach it.
+        if (container.HasOwnLanAddress)
+        {
+            return MapLanAddressed(container, Skip);
+        }
+
         // Only ports reachable from another machine: a port bound to 127.0.0.1 exists only on
         // the server, so announcing it to the LAN would send everyone to a closed door.
         var candidates = container.Ports
@@ -120,6 +129,118 @@ public static class ContainerServiceMapper
                 Origin = ServiceOrigin.Container,
                 ContainerName = container.Name,
             },
+        };
+    }
+
+    /// <summary>
+    /// Maps a container that holds its own address on the LAN, giving it a hostname of its own.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The result is <c>jellyfin.local</c> resolving straight to the container, on the port the
+    /// image actually listens on — no host, no port juggling. That needs two things avahi keeps
+    /// apart: a static host record mapping the name to the address, and a service whose
+    /// <c>host-name</c> names it.
+    /// </para>
+    /// <para>
+    /// The port comes from EXPOSE rather than a published port, since there is no published port.
+    /// Where the image exposes several, the container must say which — guessing would advertise
+    /// the wrong one and look like a broken service.
+    /// </para>
+    /// </remarks>
+    private static ContainerMapping MapLanAddressed(ContainerInfo container, Func<string, ContainerMapping> skip)
+    {
+        var port = SelectLanPort(container);
+
+        if (port is null)
+        {
+            if (container.ExposedPorts.Length == 0)
+            {
+                return skip(
+                    $"Has its own address ({container.LanAddress}) but the image exposes no port. "
+                    + $"Add the label {PortLabel} to say which port to advertise.");
+            }
+
+            return container.Labels.ContainsKey(PortLabel)
+                ? skip($"Label {PortLabel}={container.Labels[PortLabel]} is not among the exposed ports "
+                       + $"({string.Join(", ", container.ExposedPorts)}).")
+                : skip($"Has its own address ({container.LanAddress}) and exposes several ports "
+                       + $"({string.Join(", ", container.ExposedPorts)}). Add {PortLabel} to choose one.");
+        }
+
+        var hostName = $"{SanitiseHostName(container.Name)}.local";
+
+        var txt = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+
+        if (container.Labels.TryGetValue(PathLabel, out var path) && path.Length > 0)
+        {
+            txt["path"] = path;
+        }
+
+        return new ContainerMapping
+        {
+            ContainerName = container.Name,
+            IsOptedIn = true,
+            SkipReason = null,
+            Service = new ServiceDefinition
+            {
+                Key = container.Name,
+
+                // No "on %h" here: the service is not on this host, it is its own machine as far
+                // as the network is concerned.
+                DisplayName = container.Labels.TryGetValue(NameLabel, out var name) && name.Length > 0
+                    ? name
+                    : container.Name,
+                ServiceType = container.Labels.TryGetValue(TypeLabel, out var type) && type.Length > 0
+                    ? type
+                    : DefaultServiceType,
+                Port = port.Value,
+                HostName = hostName,
+                HostAddress = container.LanAddress,
+                TxtRecords = txt.ToImmutable(),
+                Origin = ServiceOrigin.Container,
+                ContainerName = container.Name,
+            },
+        };
+    }
+
+    private static int? SelectLanPort(ContainerInfo container)
+    {
+        if (container.Labels.TryGetValue(PortLabel, out var requested)
+            && int.TryParse(requested, NumberStyles.Integer, CultureInfo.InvariantCulture, out var wanted))
+        {
+            // An explicit port is honoured even when the image exposes nothing: EXPOSE is only a
+            // declaration, and plenty of images listen on ports they never declare.
+            return container.ExposedPorts.Length == 0 || container.ExposedPorts.Contains(wanted) ? wanted : null;
+        }
+
+        return container.ExposedPorts.Length == 1 ? container.ExposedPorts[0] : null;
+    }
+
+    /// <summary>
+    /// Reduces a container name to a legal DNS label.
+    /// </summary>
+    /// <remarks>
+    /// Container names allow underscores and dots; a hostname label allows neither. Compose names
+    /// containers like <c>stack-web-1</c>, which is already fine, but <c>my_app</c> would produce
+    /// a name avahi refuses to publish.
+    /// </remarks>
+    private static string SanitiseHostName(string name)
+    {
+        var cleaned = new string([.. name.ToLowerInvariant().Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-')])
+            .Trim('-');
+
+        while (cleaned.Contains("--", StringComparison.Ordinal))
+        {
+            cleaned = cleaned.Replace("--", "-", StringComparison.Ordinal);
+        }
+
+        // A DNS label is capped at 63 characters.
+        return cleaned.Length switch
+        {
+            0 => "container",
+            > 63 => cleaned[..63].TrimEnd('-'),
+            _ => cleaned,
         };
     }
 

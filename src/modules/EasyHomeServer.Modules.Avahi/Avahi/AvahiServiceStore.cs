@@ -158,6 +158,39 @@ public sealed partial class AvahiServiceStore(ISystemRunner systemRunner, AvahiO
     /// <summary>Removes every file this module owns. Used when advertising is switched off.</summary>
     public Task<ReconcileResult> WithdrawAllAsync(CancellationToken cancellationToken = default) =>
         ReconcileAsync([], cancellationToken);
+
+    /// <summary>
+    /// Asks avahi to re-read its static host records.
+    /// </summary>
+    /// <remarks>
+    /// Needed only for <see cref="AvahiHostsFile"/>: avahi watches the services directory and
+    /// picks those up by itself, but reads /etc/avahi/hosts at startup and on reload. Call this
+    /// only when that file actually changed — a reload withdraws and re-announces everything
+    /// avahi publishes, so doing it on every poll would leave every service on the network
+    /// flickering.
+    /// </remarks>
+    public async Task ReloadAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var result = await systemRunner
+                .SystemctlAsync(SystemctlAction.Reload, "avahi-daemon", cancellationToken)
+                .ConfigureAwait(false);
+
+            if (result.Succeeded)
+            {
+                logger.LogInformation("Reloaded avahi-daemon to pick up changed host records.");
+            }
+            else
+            {
+                logger.LogWarning("Could not reload avahi-daemon: {Error}", result.StandardError.Trim());
+            }
+        }
+        catch (SystemOperationException ex)
+        {
+            logger.LogWarning(ex, "Could not reload avahi-daemon; host records will apply on its next restart.");
+        }
+    }
 }
 
 /// <summary>What a reconcile did.</summary>

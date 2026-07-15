@@ -1,0 +1,185 @@
+@inject DockerCli Cli
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center">
+            <MudIcon Icon="@Icons.Material.Filled.Hub" Class="mr-2" />
+            <MudText Typo="Typo.h6">New network</MudText>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <MudTextField @bind-Value="_spec.Name" Label="Name" Immediate="true" Class="mb-4"
+                      HelperText="Containers on the same network reach each other by this name." />
+
+        <MudSelect Value="_spec.Driver" T="string" Label="Driver" ValueChanged="OnDriverChanged">
+            <MudSelectItem Value="@("bridge")">bridge — private network behind the host</MudSelectItem>
+            <MudSelectItem Value="@("macvlan")">macvlan — containers get their own address on your LAN</MudSelectItem>
+        </MudSelect>
+
+        @if (_spec.IsLanAddressed)
+        {
+            @* Stated plainly and up front. Both facts bite later and neither is guessable: an
+               address collision looks like random breakage days afterwards, and host isolation
+               looks like the container being down when it is fine. *@
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mt-4">
+                <MudText Typo="Typo.body2">
+                    Containers on a macvlan appear as separate machines on your LAN, each with its own
+                    MAC and IP. Two consequences worth knowing:
+                </MudText>
+                <ul class="dk-warn-list">
+                    <li>
+                        <b>This server will not be able to reach them.</b> The kernel isolates a macvlan
+                        parent from its children — that is by design, not a fault.
+                    </li>
+                    <li>
+                        <b>Reserve the IP range from your router's DHCP pool</b>, or it will eventually
+                        lease one of these addresses to something else.
+                    </li>
+                </ul>
+            </MudAlert>
+
+            <MudSelect Value="_spec.Parent" T="string" Label="Parent interface" ValueChanged="OnParentChanged" Class="mt-4"
+                       HelperText="The physical interface containers share. Only real NICs are listed.">
+                @foreach (var nic in _interfaces)
+                {
+                    <MudSelectItem Value="@nic">@nic</MudSelectItem>
+                }
+            </MudSelect>
+
+            @if (_interfaces.Length == 0)
+            {
+                <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-2">
+                    No physical interfaces found, so a macvlan cannot be created on this machine.
+                </MudAlert>
+            }
+
+            <MudGrid Class="mt-1">
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="_spec.Subnet" Label="Subnet" Immediate="true"
+                                  HelperText="Must be the parent's own subnet." />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="_spec.Gateway" Label="Gateway" Immediate="true"
+                                  HelperText="Normally your router." />
+                </MudItem>
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="_spec.IpRange" Label="IP range for containers" Immediate="true"
+                                  HelperText="A slice your router will not hand out, for example 192.168.1.240/28." />
+                </MudItem>
+            </MudGrid>
+        }
+
+        @if (_error is not null)
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mt-4">@_error</MudAlert>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())" Disabled="_busy">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="CreateAsync" Disabled="_busy">Create</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance Dialog { get; set; } = default!;
+
+    private readonly NetworkSpec _spec = new();
+    private ImmutableArray<string> _interfaces = [];
+    private string? _error;
+    private bool _busy;
+
+    protected override void OnInitialized()
+    {
+        _interfaces = Cli.ListPhysicalInterfaces();
+    }
+
+    private async Task OnDriverChanged(string driver)
+    {
+        _spec.Driver = driver;
+        _error = null;
+
+        // Prefill on first switch to macvlan: the subnet and gateway must match the parent's, and
+        // asking someone to retype what the machine already knows is asking them to mistype it.
+        if (_spec.IsLanAddressed && _spec.Parent.Length == 0 && _interfaces.Length > 0)
+        {
+            await OnParentChanged(_interfaces[0]);
+        }
+    }
+
+    private async Task OnParentChanged(string parent)
+    {
+        _spec.Parent = parent;
+
+        var (subnet, gateway) = await Cli.DescribeInterfaceAsync(parent);
+
+        if (subnet is not null)
+        {
+            _spec.Subnet = subnet;
+            _spec.IpRange = SuggestRange(subnet);
+        }
+
+        if (gateway is not null)
+        {
+            _spec.Gateway = gateway;
+        }
+    }
+
+    /// <summary>
+    /// Suggests a /28 at the top of the subnet — 16 addresses routers rarely lease, since DHCP
+    /// pools conventionally start low. A suggestion, not a guarantee: the form says to check.
+    /// </summary>
+    private static string SuggestRange(string subnet)
+    {
+        var parts = subnet.Split('/');
+
+        if (parts.Length != 2 || !System.Net.IPAddress.TryParse(parts[0], out var network))
+        {
+            return string.Empty;
+        }
+
+        var bytes = network.GetAddressBytes();
+
+        // Only meaningful for a /24; anything else is left to the operator.
+        if (parts[1] != "24")
+        {
+            return string.Empty;
+        }
+
+        bytes[3] = 240;
+
+        return $"{new System.Net.IPAddress(bytes)}/28";
+    }
+
+    private async Task CreateAsync()
+    {
+        _error = _spec.Validate();
+
+        if (_error is not null)
+        {
+            return;
+        }
+
+        _busy = true;
+
+        try
+        {
+            var result = await Cli.CreateNetworkAsync(_spec);
+
+            if (!result.Succeeded)
+            {
+                _error = result.Message;
+
+                return;
+            }
+
+            Dialog.Close(DialogResult.Ok(_spec.Name));
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

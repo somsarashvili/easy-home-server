@@ -88,6 +88,10 @@ public sealed class DockerPoller : ModuleBackgroundService
             var volumes = await _cli.ListVolumesAsync(cancellationToken).ConfigureAwait(false);
             var networks = await _cli.ListNetworksAsync(cancellationToken).ConfigureAwait(false);
 
+            // Needs both lists: whether a container has its own address on the LAN depends on the
+            // *network's* driver, which the container's own inspect output does not carry.
+            containers = WithLanAddresses(containers, networks);
+
             var snapshot = new DockerSnapshot
             {
                 TimestampUtc = DateTimeOffset.UtcNow,
@@ -192,6 +196,47 @@ public sealed class DockerPoller : ModuleBackgroundService
     }
 
     /// <summary>
+    /// Drivers that put a container directly on the physical network with its own MAC and
+    /// address, rather than behind the host.
+    /// </summary>
+    private static readonly string[] LanAddressedDrivers = ["macvlan", "ipvlan"];
+
+    /// <summary>
+    /// Fills in <see cref="DockerContainer.LanAddress"/> for containers attached to a macvlan or
+    /// ipvlan network.
+    /// </summary>
+    /// <remarks>
+    /// Such a container publishes no ports — it does not need to, since it answers on its own
+    /// address — so everything keyed off published ports treats it as having nothing to offer.
+    /// Recording the address is what lets the rest of the system know it is reachable at all.
+    /// </remarks>
+    private static ImmutableArray<DockerContainer> WithLanAddresses(
+        ImmutableArray<DockerContainer> containers,
+        ImmutableArray<DockerNetwork> networks)
+    {
+        var lanNetworks = networks
+            .Where(n => LanAddressedDrivers.Contains(n.Driver, StringComparer.OrdinalIgnoreCase))
+            .Select(n => n.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        if (lanNetworks.Count == 0)
+        {
+            return containers;
+        }
+
+        return
+        [
+            .. containers.Select(container =>
+            {
+                var attachment = container.NetworkAttachments
+                    .FirstOrDefault(a => lanNetworks.Contains(a.NetworkName) && a.IpAddress.Length > 0);
+
+                return attachment is null ? container : container with { LanAddress = attachment.IpAddress };
+            }),
+        ];
+    }
+
+    /// <summary>
     /// Narrows the module's rich model down to the published contract. Everything not crossing
     /// the module boundary — health, exit codes, restart policy, networks — stops here.
     /// </summary>
@@ -208,6 +253,8 @@ public sealed class DockerPoller : ModuleBackgroundService
             HostIp = p.HostIp,
             Protocol = p.Protocol,
         })],
+        LanAddress = container.LanAddress,
+        ExposedPorts = container.ExposedPorts,
         Labels = container.Labels,
     };
 

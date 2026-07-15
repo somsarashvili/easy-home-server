@@ -41,8 +41,24 @@ public sealed record DockerContainer
     /// <summary>Published port bindings. Unpublished container ports are omitted.</summary>
     public ImmutableArray<PortBinding> Ports { get; init; } = [];
 
+    /// <summary>Networks the container is attached to, with the address it holds on each.</summary>
+    public ImmutableArray<NetworkAttachment> NetworkAttachments { get; init; } = [];
+
     /// <summary>Attached network names.</summary>
-    public ImmutableArray<string> Networks { get; init; } = [];
+    public ImmutableArray<string> Networks => [.. NetworkAttachments.Select(a => a.NetworkName)];
+
+    /// <summary>
+    /// The container's own address on the LAN, when attached to a macvlan or ipvlan network.
+    /// Null for the usual bridged case.
+    /// </summary>
+    /// <remarks>
+    /// Set by the poller rather than parsed from inspect: deciding this needs the *network's*
+    /// driver, which a container's own inspect output does not carry. The poller has both.
+    /// </remarks>
+    public string? LanAddress { get; init; }
+
+    /// <summary>Ports the image declares with EXPOSE, published or not.</summary>
+    public ImmutableArray<int> ExposedPorts { get; init; } = [];
 
     /// <summary>
     /// Names of named volumes this container mounts. Bind mounts are excluded — they are host
@@ -99,6 +115,19 @@ public enum ContainerState
 
     /// <summary>The daemon could not stop it cleanly.</summary>
     Dead,
+}
+
+/// <summary>A container's attachment to one network.</summary>
+public sealed record NetworkAttachment
+{
+    /// <summary>Network name.</summary>
+    public required string NetworkName { get; init; }
+
+    /// <summary>Address the container holds on this network. Empty for drivers that assign none, such as host.</summary>
+    public required string IpAddress { get; init; }
+
+    /// <summary>The container's MAC on this network.</summary>
+    public string? MacAddress { get; init; }
 }
 
 /// <summary>A published port mapping from host to container.</summary>

@@ -88,6 +88,32 @@ public sealed record ContainerInfo
     public ImmutableArray<PublishedPort> Ports { get; init; } = [];
 
     /// <summary>
+    /// The container's own address on the LAN, when it is attached to a network that puts it
+    /// there directly — macvlan or ipvlan. Null for the usual case, where the container sits
+    /// behind the host and is reached through a published port.
+    /// </summary>
+    /// <remarks>
+    /// A container with one of these is a peer of the host on the network rather than something
+    /// behind it: it has its own MAC, answers on its own address, and publishes no ports at all —
+    /// <see cref="Ports"/> is empty. Note that the host cannot reach it; that is kernel-level
+    /// macvlan isolation, not a misconfiguration.
+    /// </remarks>
+    public string? LanAddress { get; init; }
+
+    /// <summary>
+    /// Ports the image declares with EXPOSE.
+    /// </summary>
+    /// <remarks>
+    /// Normally redundant — what matters is what is published. It is the only thing available for
+    /// a container with a <see cref="LanAddress"/>, which publishes nothing and simply listens on
+    /// its own address.
+    /// </remarks>
+    public ImmutableArray<int> ExposedPorts { get; init; } = [];
+
+    /// <summary>True when the container answers on its own LAN address rather than through the host.</summary>
+    public bool HasOwnLanAddress => !string.IsNullOrEmpty(LanAddress);
+
+    /// <summary>
     /// Container labels. The extension point of this contract: a module can look for its own
     /// labels here without the Docker module knowing it exists.
     /// </summary>
