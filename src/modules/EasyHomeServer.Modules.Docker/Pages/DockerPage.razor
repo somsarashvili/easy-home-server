@@ -120,6 +120,8 @@ else
                                 </MudText>
                             </div>
 
+                            @* Not gated on the project having containers: a project with none is
+                               precisely the state that used to be impossible to get out of. *@
                             @if (Options.AllowContainerControl && _composeAvailable && project.IsActionable)
                             {
                                 <div class="d-flex align-center">
@@ -170,12 +172,28 @@ else
                                         </MudTooltip>
                                     }
 
-                                    <MudTooltip Text="Down — stop and remove containers and networks">
-                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                    @* Down and Delete are different things and used to share the
+                                       trash icon, which made "remove the containers" look like
+                                       "remove the project". Down clears the stack; Delete is the
+                                       one that is gone for good. *@
+                                    <MudTooltip Text="Down — stop and remove containers and networks, keeping the compose file">
+                                        <MudIconButton Icon="@Icons.Material.Filled.LayersClear" Size="Size.Small" Color="Color.Error"
                                                        aria-label="@($"Take {project.Name} down")"
                                                        Disabled="@(_projectBusy is not null)"
                                                        OnClick="@(() => DownProject(project))" />
                                     </MudTooltip>
+
+                                    @if (project.IsManaged)
+                                    {
+                                        @* Only for projects whose file this module owns. An external
+                                           project's file lives somewhere we have no business deleting. *@
+                                        <MudTooltip Text="Delete — take down and remove the compose file">
+                                            <MudIconButton Icon="@Icons.Material.Filled.DeleteForever" Size="Size.Small" Color="Color.Error"
+                                                           aria-label="@($"Delete {project.Name}")"
+                                                           Disabled="@(_projectBusy is not null)"
+                                                           OnClick="@(() => DeleteProject(project))" />
+                                        </MudTooltip>
+                                    }
                                 </div>
                             }
                         </div>
@@ -648,6 +666,33 @@ else
         {
             _projectBusy = null;
         }
+    }
+
+    /// <summary>
+    /// Deletes a project outright. Separate from Down, which only removes the containers.
+    /// </summary>
+    private async Task DeleteProject(ComposeProject project)
+    {
+        var hasVolumes = project.Containers.Any(c => c.VolumeMounts.Length > 0);
+
+        var parameters = new DialogParameters<DeleteProjectDialog>
+        {
+            { x => x.ProjectName, project.Name },
+            { x => x.ComposeFile, project.ConfigFiles.FirstOrDefault() ?? string.Empty },
+            { x => x.HasVolumes, hasVolumes },
+        };
+
+        var dialog = await DialogService.ShowAsync<DeleteProjectDialog>(
+            $"Delete {project.Name}",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        if (await dialog.Result is not { Canceled: false, Data: bool removeVolumes })
+        {
+            return;
+        }
+
+        await RunProject(project, "Deleted", () => Compose.DeleteAsync(project, removeVolumes));
     }
 
     private async Task DownProject(ComposeProject project)

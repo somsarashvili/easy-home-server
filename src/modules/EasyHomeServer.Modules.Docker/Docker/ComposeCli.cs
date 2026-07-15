@@ -249,6 +249,93 @@ public sealed partial class ComposeCli(ISystemRunner systemRunner, DockerOptions
     public Task<DockerActionResult> PullAsync(ComposeProject project, CancellationToken cancellationToken = default) =>
         RunComposeAsync(project, ["pull"], "pull images for", options.ComposeUpTimeout, cancellationToken);
 
+    /// <summary>
+    /// Takes a project down and deletes its compose file, removing it entirely.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Distinct from <see cref="DownAsync"/>, which only removes the containers: the file stays,
+    /// so the project is rediscovered on the next scan and sits in the list as "not created"
+    /// forever. This is what actually removes it.
+    /// </para>
+    /// <para>
+    /// Only for managed projects. An external project's file lives somewhere this module does not
+    /// own — someone's home directory, a git checkout — and deleting it would be well beyond what
+    /// "remove this from the list" ought to mean.
+    /// </para>
+    /// </remarks>
+    public async Task<DockerActionResult> DeleteAsync(
+        ComposeProject project,
+        bool removeVolumes = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+
+        if (!project.IsManaged)
+        {
+            return new DockerActionResult
+            {
+                Succeeded = false,
+                Message = $"'{project.Name}' is defined outside {options.ComposeProjectsPath}, so its file is not "
+                          + "this tool's to delete. Take it down here and remove the file yourself.",
+            };
+        }
+
+        // Containers first: once the file is gone compose cannot work out what to remove, and the
+        // containers would be orphaned with nothing left describing them.
+        if (project.IsActionable && project.ContainerCount > 0)
+        {
+            var down = await DownAsync(project, removeVolumes, cancellationToken).ConfigureAwait(false);
+
+            if (!down.Succeeded)
+            {
+                return new DockerActionResult
+                {
+                    Succeeded = false,
+                    Message = $"Could not take '{project.Name}' down, so its files were left alone: {down.Message}",
+                };
+            }
+        }
+
+        var directory = DirectoryFor(project.Name);
+
+        // The name is validated on the way in, but this is a recursive delete: check the resolved
+        // path really is inside the projects directory rather than trusting that it must be.
+        var root = Path.GetFullPath(options.ComposeProjectsPath);
+        var resolved = Path.GetFullPath(directory);
+
+        if (!resolved.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        {
+            logger.LogError("Refusing to delete {Resolved}: it is outside {Root}.", resolved, root);
+
+            return new DockerActionResult
+            {
+                Succeeded = false,
+                Message = $"Refusing to delete '{resolved}': it is outside the projects directory.",
+            };
+        }
+
+        try
+        {
+            if (Directory.Exists(resolved))
+            {
+                Directory.Delete(resolved, recursive: true);
+            }
+
+            logger.LogInformation("Deleted compose project {ProjectName} ({Directory}).", project.Name, resolved);
+
+            return new DockerActionResult { Succeeded = true, Message = $"Deleted {project.Name}." };
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new DockerActionResult
+            {
+                Succeeded = false,
+                Message = $"'{project.Name}' was taken down, but its files could not be deleted: {ex.Message}",
+            };
+        }
+    }
+
     private async Task<DockerActionResult> RunComposeAsync(
         ComposeProject project,
         string[] verb,

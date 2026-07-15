@@ -1,0 +1,70 @@
+@* Deleting a project is the one action here that destroys something unrecoverable — the compose
+   file. So it says exactly what goes and what stays, rather than a generic "are you sure?". *@
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center">
+            <MudIcon Icon="@Icons.Material.Filled.DeleteForever" Color="Color.Error" Class="mr-2" />
+            <MudText Typo="Typo.h6">Delete @ProjectName</MudText>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <MudText Typo="Typo.body1" Class="mb-3">
+            This takes the project down and deletes its compose file. It cannot be undone from here.
+        </MudText>
+
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">Removed:</MudText>
+        <ul class="dk-warn-list">
+            <li>its containers and networks</li>
+            <li><code>@ComposeFile</code></li>
+        </ul>
+
+        @if (HasVolumes)
+        {
+            @* Volumes are the only thing here holding data someone would miss, so removing them is
+               a separate, deliberate choice rather than a side effect of deleting a project. *@
+            <MudCheckBox @bind-Value="_removeVolumes" Color="Color.Error" Dense="true" Class="mt-3"
+                         Label="Also delete this project's named volumes" />
+
+            <MudText Typo="Typo.caption" Class="mud-text-secondary d-block ml-8">
+                @(_removeVolumes
+                    ? "The data in those volumes is deleted permanently."
+                    : "Its volumes and their data are kept, and will be reused if you recreate the project.")
+            </MudText>
+        }
+        else
+        {
+            <MudText Typo="Typo.body2" Class="mud-text-secondary mt-2">
+                It has no named volumes, so there is no data to keep.
+            </MudText>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Error" Variant="Variant.Filled"
+                   OnClick="@(() => Dialog.Close(DialogResult.Ok(_removeVolumes)))">
+            Delete @(_removeVolumes ? "with volumes" : "project")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance Dialog { get; set; } = default!;
+
+    /// <summary>Project being deleted.</summary>
+    [Parameter]
+    public string ProjectName { get; set; } = string.Empty;
+
+    /// <summary>Path of the file that will be deleted, shown so there is no doubt what goes.</summary>
+    [Parameter]
+    public string ComposeFile { get; set; } = string.Empty;
+
+    /// <summary>Whether the project has named volumes worth asking about.</summary>
+    [Parameter]
+    public bool HasVolumes { get; set; }
+
+    private bool _removeVolumes;
+}
