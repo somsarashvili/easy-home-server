@@ -10,5 +10,6 @@
     <Project Path="src/modules/EasyHomeServer.Modules.SystemInfo/EasyHomeServer.Modules.SystemInfo.csproj" />
     <Project Path="src/modules/EasyHomeServer.Modules.Docker/EasyHomeServer.Modules.Docker.csproj" />
     <Project Path="src/modules/EasyHomeServer.Modules.Avahi/EasyHomeServer.Modules.Avahi.csproj" />
+    <Project Path="src/modules/EasyHomeServer.Modules.Disks/EasyHomeServer.Modules.Disks.csproj" />
   </Folder>
 </Solution>

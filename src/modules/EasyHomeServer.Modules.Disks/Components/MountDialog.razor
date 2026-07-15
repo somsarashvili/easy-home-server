@@ -1,0 +1,118 @@
+@inject MountManager Mounts
+@inject DisksOptions Options
+
+@* Mounting is reversible, so this asks little: where, and whether it should survive a reboot. *@
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center">
+            <MudIcon Icon="@Icons.Material.Filled.DriveFolderUpload" Class="mr-2" />
+            <MudText Typo="Typo.h6">Mount @Device.Name</MudText>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3">
+            @Device.FileSystem @(Device.Label is { Length: > 0 } label ? $"“{label}” " : "")&middot;
+            @Format.Bytes(Device.SizeBytes)
+        </MudText>
+
+        <MudTextField @bind-Value="_mountPoint"
+                      Label="Mount at"
+                      Immediate="true"
+                      Error="@(_error is not null)"
+                      ErrorText="@_error"
+                      HelperText="@($"Created if it does not exist, as long as it is under {Options.MountRoot}.")" />
+
+        <MudCheckBox @bind-Value="_persist" Color="Color.Primary" Dense="true" Class="mt-4"
+                     Label="Mount automatically at boot" />
+
+        <MudText Typo="Typo.caption" Class="mud-text-secondary d-block ml-8">
+            @if (_persist)
+            {
+                @* Explains the UUID because it is the reason this is trustworthy, and nofail
+                   because it is the reason it will not brick the machine. *@
+                <span>
+                    Adds it to <code>@Options.FstabPath</code> by filesystem UUID, so it finds the right disk
+                    even if the kernel names it differently after a reboot. Marked <code>nofail</code>, so a
+                    missing disk cannot stop the machine from booting.
+                </span>
+            }
+            else
+            {
+                <span>It stays mounted until the next reboot.</span>
+            }
+        </MudText>
+
+        @if (Device.Uuid is null && _persist)
+        {
+            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-3">
+                This filesystem has no UUID, so it cannot be identified reliably at boot and will not be
+                added to fstab.
+            </MudAlert>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())" Disabled="_busy">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="MountAsync" Disabled="_busy">Mount</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance Dialog { get; set; } = default!;
+
+    /// <summary>The partition or disk being mounted.</summary>
+    [Parameter]
+    public BlockDevice Device { get; set; } = default!;
+
+    private string _mountPoint = string.Empty;
+    private bool _persist = true;
+    private string? _error;
+    private bool _busy;
+
+    protected override void OnInitialized()
+    {
+        _mountPoint = Mounts.SuggestMountPoint(Device);
+    }
+
+    private async Task MountAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await Mounts.MountAsync(Device, _mountPoint.Trim());
+
+            if (!result.Succeeded)
+            {
+                _error = result.Message;
+
+                return;
+            }
+
+            // fstab only after the mount worked. Recording a mount that failed would mean a boot
+            // that fails the same way, at a worse time.
+            if (_persist && Device.Uuid is not null)
+            {
+                var persisted = await Mounts.AddToFstabAsync(Device, _mountPoint.Trim());
+
+                if (!persisted.Succeeded)
+                {
+                    Dialog.Close(DialogResult.Ok(
+                        $"Mounted at {_mountPoint}, but it will not come back at boot: {persisted.Message}"));
+
+                    return;
+                }
+            }
+
+            Dialog.Close(DialogResult.Ok(result.Message));
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

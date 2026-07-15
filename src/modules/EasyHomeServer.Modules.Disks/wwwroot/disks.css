@@ -1,0 +1,59 @@
+/*
+ * Served from inside the module assembly at /_content/EasyHomeServer.Modules.Disks/disks.css.
+ */
+
+.dsk-table {
+    overflow-x: auto;
+}
+
+.dsk-mono {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.8rem;
+}
+
+.dsk-numeric {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.dsk-actions {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.dsk-chip {
+    height: 20px;
+}
+
+.dsk-usage {
+    min-width: 12rem;
+}
+
+.dsk-usage-bar {
+    flex: 1;
+    height: 6px;
+}
+
+.dsk-usage-value {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+/* "mount to see" is an absence, not a value — it should not read as one. */
+.dsk-unknown {
+    font-style: italic;
+    font-size: 0.78rem;
+}
+
+/* Label/value table, in the dialogs. */
+.dsk-details td:first-child {
+    width: 11rem;
+    color: var(--mud-palette-text-secondary);
+    vertical-align: top;
+    white-space: nowrap;
+}
+
+.dsk-details td {
+    white-space: normal;
+}

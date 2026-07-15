@@ -1,0 +1,158 @@
+@inject SmartReader Smart
+
+@* SMART is the only thing here that predicts rather than describes. It is loaded on demand
+   because smartctl wakes a sleeping disk — polling it would keep every drive in the machine
+   spinning to answer a question nobody asked. *@
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center">
+            <MudIcon Icon="@Icons.Material.Filled.MonitorHeart" Class="mr-2" />
+            <MudText Typo="Typo.h6">@Device.Name health</MudText>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_health is null)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="my-3" />
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">Reading SMART…</MudText>
+        }
+        else if (_health.Availability != SmartReader.SmartAvailability.Available)
+        {
+            @* Not an error state. A virtual disk has no SMART, and saying "unavailable" plainly is
+               more useful than an alarming red box about a disk that is fine. *@
+            <MudAlert Severity="@(_health.Availability == SmartReader.SmartAvailability.ToolMissing ? Severity.Warning : Severity.Info)"
+                      Variant="Variant.Outlined">
+                <MudText Typo="Typo.subtitle2">
+                    @(_health.Availability switch
+                    {
+                        SmartReader.SmartAvailability.NotSupported => "No SMART on this device",
+                        SmartReader.SmartAvailability.ToolMissing => "smartmontools is not installed",
+                        _ => "SMART could not be read",
+                    })
+                </MudText>
+                <MudText Typo="Typo.body2" Class="mud-text-secondary mt-1">@_health.Reason</MudText>
+            </MudAlert>
+        }
+        else
+        {
+            @if (_health.Passed is { } passed)
+            {
+                <MudAlert Severity="@(passed ? Severity.Success : Severity.Error)" Variant="Variant.Outlined" Class="mb-4">
+                    <MudText Typo="Typo.subtitle2">
+                        @(passed ? "The disk reports itself healthy" : "The disk reports itself FAILING")
+                    </MudText>
+                    <MudText Typo="Typo.body2" Class="mt-1">
+                        @if (passed)
+                        {
+                            @* Honest about what the verdict is worth. A passing self-assessment is
+                               routine right up until a disk dies, and someone reading a green box
+                               should know it is not a guarantee. *@
+                            <span>
+                                This is the disk's own assessment. Drives often pass right up until they fail, so
+                                treat it as one signal, not a guarantee — the counters below say more.
+                            </span>
+                        }
+                        else
+                        {
+                            <span>Replace it. Copy anything you care about off it first, and do that now.</span>
+                        }
+                    </MudText>
+                </MudAlert>
+            }
+
+            <MudSimpleTable Dense="true" Elevation="0" Class="dsk-table dsk-details">
+                <tbody>
+                    @if (_health.Model is { } model)
+                    {
+                        <tr><td>Model</td><td>@model</td></tr>
+                    }
+                    @if (_health.Firmware is { } firmware)
+                    {
+                        <tr><td>Firmware</td><td class="dsk-mono">@firmware</td></tr>
+                    }
+                    @if (_health.PowerOnHours is { } hours)
+                    {
+                        <tr><td>Powered on for</td><td>@Format.PowerOnHours(hours)</td></tr>
+                    }
+                    @if (_health.PowerCycles is { } cycles)
+                    {
+                        <tr><td>Power cycles</td><td>@cycles.ToString("N0")</td></tr>
+                    }
+                    @if (_health.TemperatureCelsius is { } temperature)
+                    {
+                        <tr>
+                            <td>Temperature</td>
+                            <td>
+                                @temperature °C
+                                @if (temperature >= 55)
+                                {
+                                    @* Above ~55°C, drive failure rates climb sharply. *@
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined"
+                                             Class="ml-2 dsk-chip">hot</MudChip>
+                                }
+                            </td>
+                        </tr>
+                    }
+                    @if (_health.ReallocatedSectors is { } reallocated)
+                    {
+                        <tr>
+                            <td>Reallocated sectors</td>
+                            <td>
+                                @reallocated
+                                @if (reallocated > 0)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined"
+                                             Class="ml-2 dsk-chip">watch</MudChip>
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">
+                                        The disk has found bad sectors and moved them. A steady number is survivable;
+                                        one that keeps climbing means it is failing.
+                                    </MudText>
+                                }
+                            </td>
+                        </tr>
+                    }
+                    @if (_health.PendingSectors is { } pending)
+                    {
+                        <tr>
+                            <td>Pending sectors</td>
+                            <td>
+                                @pending
+                                @if (pending > 0)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined"
+                                             Class="ml-2 dsk-chip">act</MudChip>
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">
+                                        Sectors it cannot read and has not yet remapped. This is data it may already
+                                        have lost. Check your backups.
+                                    </MudText>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Close())">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance Dialog { get; set; } = default!;
+
+    /// <summary>The disk being examined.</summary>
+    [Parameter]
+    public BlockDevice Device { get; set; } = default!;
+
+    private SmartReader.SmartHealth? _health;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _health = await Smart.ReadAsync(Device.Path);
+    }
+}

@@ -1,0 +1,132 @@
+@inject DiskFormatter Formatter
+
+@* The most destructive thing in this tool. It shows exactly what is about to be lost, and makes
+   the operator type the device name — not as ceremony, but because the failure mode is picking the
+   wrong disk from a list of near-identical ones, and typing the name is the one action that cannot
+   be done by muscle memory on the wrong row. *@
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center">
+            <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Error" Class="mr-2" />
+            <MudText Typo="Typo.h6">Prepare @Device.Name</MudText>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-4">
+            <MudText Typo="Typo.subtitle2">Everything on this disk will be destroyed.</MudText>
+            <MudText Typo="Typo.body2" Class="mt-1">
+                It gets a new partition table, one partition using the whole disk, and a fresh filesystem.
+                There is no undo.
+            </MudText>
+        </MudAlert>
+
+        <MudSimpleTable Dense="true" Elevation="0" Class="dsk-table dsk-details mb-4">
+            <tbody>
+                <tr><td>Device</td><td class="dsk-mono">@Device.Path</td></tr>
+                <tr><td>Size</td><td>@Format.Bytes(Device.SizeBytes)</td></tr>
+                <tr>
+                    <td>Model</td>
+                    <td>@(Device.Model ?? Device.Vendor ?? "not reported")</td>
+                </tr>
+                <tr>
+                    <td>Serial</td>
+                    @* The only way to tell two identical disks apart. If anything here is checked
+                       against the physical label on the drive, it is this. *@
+                    <td class="dsk-mono">@(Device.Serial ?? "not reported")</td>
+                </tr>
+                @if (Device.Children.Length > 0)
+                {
+                    <tr>
+                        <td>Currently holds</td>
+                        <td>
+                            @foreach (var child in Device.Children)
+                            {
+                                <div>
+                                    @child.Name — @Format.Bytes(child.SizeBytes)
+                                    @(child.FileSystem is { } fs ? $", {fs}" : ", no filesystem")
+                                    @(child.Label is { Length: > 0 } l ? $" “{l}”" : "")
+                                </div>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+
+        <MudSelect @bind-Value="_fileSystem" Label="Filesystem" Class="mb-2">
+            @foreach (var choice in DiskFormatter.FileSystems)
+            {
+                <MudSelectItem Value="@choice.Id">@choice.Name — @choice.Description</MudSelectItem>
+            }
+        </MudSelect>
+
+        <MudTextField @bind-Value="_label" Label="Label (optional)" Immediate="true" Class="mb-4"
+                      HelperText="A name for the filesystem, used as the default mount point later." />
+
+        <MudTextField @bind-Value="_confirmation"
+                      Label="@($"Type {Device.Name} to confirm")"
+                      Immediate="true"
+                      Error="@(_error is not null)"
+                      ErrorText="@_error" />
+
+        @if (_busy)
+        {
+            <MudProgressLinear Color="Color.Error" Indeterminate="true" Class="mt-4" />
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                Working. Making a filesystem on a large disk takes a while — do not leave the page.
+            </MudText>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())" Disabled="_busy">Cancel</MudButton>
+        <MudButton Color="Color.Error" Variant="Variant.Filled" OnClick="PrepareAsync"
+                   Disabled="@(_busy || !IsConfirmed)">
+            Erase and prepare
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance Dialog { get; set; } = default!;
+
+    /// <summary>The disk being prepared.</summary>
+    [Parameter]
+    public BlockDevice Device { get; set; } = default!;
+
+    private string _fileSystem = "ext4";
+    private string _label = string.Empty;
+    private string _confirmation = string.Empty;
+    private string? _error;
+    private bool _busy;
+
+    /// <summary>The button stays dead until the name is typed exactly. Case-sensitive: so is the device.</summary>
+    private bool IsConfirmed => string.Equals(_confirmation.Trim(), Device.Name, StringComparison.Ordinal);
+
+    private async Task PrepareAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await Formatter.PrepareAsync(Device, _fileSystem, _label.Trim() is { Length: > 0 } l ? l : null, _confirmation.Trim());
+
+            if (!result.Succeeded)
+            {
+                _error = result.Message;
+
+                return;
+            }
+
+            Dialog.Close(DialogResult.Ok(result.Message));
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

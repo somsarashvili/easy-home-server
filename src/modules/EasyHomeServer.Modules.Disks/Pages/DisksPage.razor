@@ -1,0 +1,359 @@
+@page "/disks"
+@attribute [Authorize]
+@implements IDisposable
+
+@inject IEventBus EventBus
+@inject DiskPoller Poller
+@inject MountManager Mounts
+@inject SmartReader Smart
+@inject DisksOptions Options
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<link rel="stylesheet" href="_content/EasyHomeServer.Modules.Disks/disks.css" />
+
+<PageTitle>Disks</PageTitle>
+
+<div class="mb-6">
+    <MudText Typo="Typo.h4">Disks</MudText>
+    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+        @if (_snapshot is not null)
+        {
+            @($"{_snapshot.Disks.Count()} disk{(_snapshot.Disks.Count() == 1 ? "" : "s")} · {Format.Bytes(_snapshot.TotalBytes)} total")
+        }
+        else
+        {
+            @("Reading storage…")
+        }
+    </MudText>
+</div>
+
+@if (!Poller.IsAvailable)
+{
+    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined">
+        <MudText Typo="Typo.subtitle2">Storage cannot be read</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mt-1">
+            <code>lsblk</code> is not available on this machine.
+        </MudText>
+    </MudAlert>
+}
+else if (_snapshot is null)
+{
+    <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="my-4" />
+}
+else
+{
+    @foreach (var disk in _snapshot.Disks)
+    {
+        <MudPaper Class="pa-4 mb-4" Elevation="0">
+            <div class="d-flex align-center justify-space-between mb-1">
+                <div>
+                    <div class="d-flex align-center">
+                        <MudIcon Icon="@Icons.Material.Filled.Storage" Class="mr-2 mud-text-secondary" />
+                        <MudText Typo="Typo.h6">@disk.Name</MudText>
+                        <MudText Typo="Typo.body2" Class="mud-text-secondary ml-3">@Format.Bytes(disk.SizeBytes)</MudText>
+
+                        @if (disk.IsSystemDisk)
+                        {
+                            @* Says why its destructive actions are disabled, before anyone wonders. *@
+                            <MudTooltip Text="This disk holds the running system, so it cannot be prepared or unmounted here.">
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info"
+                                         Class="ml-3 dsk-chip">system</MudChip>
+                            </MudTooltip>
+                        }
+
+                        @if (disk.IsRemovable)
+                        {
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default"
+                                     Class="ml-2 dsk-chip">removable</MudChip>
+                        }
+
+                        @if (disk.IsBlank)
+                        {
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning"
+                                     Class="ml-2 dsk-chip">blank</MudChip>
+                        }
+                    </div>
+
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                        <span class="dsk-mono">@disk.Path</span>
+                        @if (disk.Model is { } model)
+                        {
+                            <span> &middot; @model</span>
+                        }
+                        @if (disk.Serial is { } serial)
+                        {
+                            <span> &middot; serial <span class="dsk-mono">@serial</span></span>
+                        }
+                        @if (disk.Transport is { } transport)
+                        {
+                            <span> &middot; @transport</span>
+                        }
+                        @if (disk.PartitionTable is { } table)
+                        {
+                            <span> &middot; @table.ToUpperInvariant()</span>
+                        }
+                    </MudText>
+                </div>
+
+                <div class="d-flex align-center">
+                    <MudTooltip Text="Drive health (SMART)">
+                        <MudIconButton Icon="@Icons.Material.Filled.MonitorHeart" Size="Size.Small"
+                                       aria-label="@($"Health of {disk.Name}")"
+                                       OnClick="@(() => ShowHealth(disk))" />
+                    </MudTooltip>
+
+                    @if (Options.AllowFormat)
+                    {
+                        var refusal = DiskFormatter.DescribeRefusal(disk);
+
+                        <MudTooltip Text="@(refusal ?? "Erase and prepare this disk")">
+                            <MudIconButton Icon="@Icons.Material.Filled.FormatPaint" Size="Size.Small" Color="Color.Error"
+                                           aria-label="@($"Prepare {disk.Name}")"
+                                           Disabled="@(refusal is not null || _busy)"
+                                           OnClick="@(() => PrepareDisk(disk))" />
+                        </MudTooltip>
+                    }
+                </div>
+            </div>
+
+            @if (disk.Children.Length == 0)
+            {
+                <MudAlert Severity="Severity.Normal" Variant="Variant.Outlined" Dense="true" Class="mt-3">
+                    <MudText Typo="Typo.body2">
+                        @if (disk.FileSystem is { } fs)
+                        {
+                            @* A filesystem written straight to the disk with no partition table.
+                               Unusual but legal, and worth naming rather than showing an empty box. *@
+                            <span>No partitions — a @fs filesystem is written directly to the disk.</span>
+                        }
+                        else
+                        {
+                            <span>Nothing on it. Prepare it to make it usable.</span>
+                        }
+                    </MudText>
+                </MudAlert>
+            }
+            else
+            {
+                <MudSimpleTable Dense="true" Hover="true" Elevation="0" Class="dsk-table mt-2">
+                    <thead>
+                        <tr>
+                            <th>Partition</th>
+                            <th>Filesystem</th>
+                            <th class="dsk-numeric">Size</th>
+                            <th>Mounted at</th>
+                            <th class="dsk-usage">Used</th>
+                            <th class="dsk-actions">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var part in disk.Children)
+                        {
+                            <tr>
+                                <td>
+                                    <b>@part.Name</b>
+                                    @if (part.Label is { Length: > 0 } label)
+                                    {
+                                        <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">@label</MudText>
+                                    }
+                                </td>
+                                <td class="mud-text-secondary">@(part.FileSystem ?? "—")</td>
+                                <td class="dsk-numeric">@Format.Bytes(part.SizeBytes)</td>
+                                <td>
+                                    @if (part.MountPoint is { } mount)
+                                    {
+                                        <span class="dsk-mono">@mount</span>
+
+                                        @if (Mounts.IsInFstab(part))
+                                        {
+                                            <MudTooltip Text="@(Mounts.IsManagedInFstab(part)
+                                                ? "In fstab, added here. Unmounting removes the entry too."
+                                                : "In fstab already — added by the installer or by hand, and left alone here.")">
+                                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                                         Color="Color.Success" Class="ml-2 dsk-chip">at boot</MudChip>
+                                            </MudTooltip>
+                                        }
+                                        else
+                                        {
+                                            @* The distinction that matters and is invisible otherwise:
+                                               this mount disappears at the next reboot. *@
+                                            <MudTooltip Text="Not in fstab — this mount is gone after a reboot.">
+                                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                                         Color="Color.Warning" Class="ml-2 dsk-chip">temporary</MudChip>
+                                            </MudTooltip>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        <span class="mud-text-secondary">not mounted</span>
+                                    }
+                                </td>
+                                <td class="dsk-usage">
+                                    @if (part.UsedPercent is { } used)
+                                    {
+                                        <div class="d-flex align-center">
+                                            <MudProgressLinear Color="@UsageColor(used)" Value="@used" Class="dsk-usage-bar" />
+                                            <MudText Typo="Typo.caption" Class="ml-2 dsk-usage-value">@Format.Percent(used)</MudText>
+                                        </div>
+                                        <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                            @Format.Bytes(part.FsAvailableBytes) free
+                                        </MudText>
+                                    }
+                                    else
+                                    {
+                                        @* Free space comes from statfs, which needs the filesystem
+                                           mounted. Unmounted, it is genuinely unknown. *@
+                                        <span class="mud-text-secondary dsk-unknown">
+                                            @(part.FileSystem is null ? "—" : "mount to see")
+                                        </span>
+                                    }
+                                </td>
+                                <td class="dsk-actions">
+                                    @if (Options.AllowMountControl && part.FileSystem is not null)
+                                    {
+                                        @if (part.IsMounted)
+                                        {
+                                            <MudTooltip Text="@(part.IsSystemDisk ? "Part of the running system" : "Unmount")">
+                                                <MudIconButton Icon="@Icons.Material.Filled.Eject" Size="Size.Small"
+                                                               aria-label="@($"Unmount {part.Name}")"
+                                                               Disabled="@(part.IsSystemDisk || _busy)"
+                                                               OnClick="@(() => Unmount(part))" />
+                                            </MudTooltip>
+                                        }
+                                        else
+                                        {
+                                            <MudTooltip Text="Mount">
+                                                <MudIconButton Icon="@Icons.Material.Filled.DriveFolderUpload" Size="Size.Small"
+                                                               Color="Color.Primary"
+                                                               aria-label="@($"Mount {part.Name}")"
+                                                               Disabled="_busy"
+                                                               OnClick="@(() => Mount(part))" />
+                                            </MudTooltip>
+                                        }
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+            }
+        </MudPaper>
+    }
+
+    <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-4">
+        Read every @Options.PollIntervalSeconds.ToString("0.#")s &middot; last at
+        @_snapshot.TimestampUtc.ToLocalTime().ToString("HH:mm:ss")
+    </MudText>
+}
+
+@code {
+    private IDisposable? _subscription;
+    private DiskSnapshot? _snapshot;
+    private bool _busy;
+
+    protected override void OnInitialized()
+    {
+        _snapshot = Poller.Latest;
+        _subscription = EventBus.Subscribe<DiskSnapshot>((snapshot, _) =>
+        {
+            _snapshot = snapshot;
+
+            return InvokeAsync(StateHasChanged);
+        });
+    }
+
+    private static Color UsageColor(double percent) => percent switch
+    {
+        >= 90 => Color.Error,
+        >= 75 => Color.Warning,
+        _ => Color.Primary,
+    };
+
+    private async Task Mount(BlockDevice device)
+    {
+        var parameters = new DialogParameters<MountDialog> { { x => x.Device, device } };
+
+        var dialog = await DialogService.ShowAsync<MountDialog>(
+            $"Mount {device.Name}",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        if (await dialog.Result is { Canceled: false, Data: string message })
+        {
+            Snackbar.Add(message, Severity.Success);
+            await RefreshAsync();
+        }
+    }
+
+    private async Task Unmount(BlockDevice device)
+    {
+        _busy = true;
+
+        try
+        {
+            var result = await Mounts.UnmountAsync(device);
+
+            Snackbar.Add(
+                result.Message,
+                result.Succeeded ? Severity.Success : Severity.Error,
+                // The busy-mount message names a command to run; five seconds is not long enough
+                // to read it, let alone copy it.
+                config => config.VisibleStateDuration = result.Succeeded ? 4000 : 15000);
+
+            // Only entries this module wrote. Unmounting must never quietly delete a line the
+            // admin put in fstab by hand — but leaving one this module added means the mount
+            // silently returns at the next reboot, which is not what "unmount" meant either.
+            if (result.Succeeded && Mounts.IsManagedInFstab(device))
+            {
+                await Mounts.RemoveFromFstabAsync(device);
+                Snackbar.Add($"{device.Name} was also removed from fstab, so it will not return at boot.", Severity.Info);
+            }
+
+            await RefreshAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task PrepareDisk(BlockDevice disk)
+    {
+        var parameters = new DialogParameters<PrepareDiskDialog> { { x => x.Device, disk } };
+
+        var dialog = await DialogService.ShowAsync<PrepareDiskDialog>(
+            $"Prepare {disk.Name}",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseOnEscapeKey = false });
+
+        if (await dialog.Result is { Canceled: false, Data: string message })
+        {
+            Snackbar.Add(message, Severity.Success);
+            await RefreshAsync();
+        }
+    }
+
+    private async Task ShowHealth(BlockDevice disk)
+    {
+        var parameters = new DialogParameters<HealthDialog> { { x => x.Device, disk } };
+
+        await DialogService.ShowAsync<HealthDialog>(
+            $"Health: {disk.Name}",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+    }
+
+    /// <summary>Re-reads immediately rather than waiting up to ten seconds for the next poll.</summary>
+    private async Task RefreshAsync()
+    {
+        await Poller.RefreshAsync();
+        _snapshot = Poller.Latest;
+        StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        _subscription?.Dispose();
+    }
+}

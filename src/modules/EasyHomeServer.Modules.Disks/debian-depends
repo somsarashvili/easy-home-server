@@ -1,0 +1,12 @@
+# Debian packages this module needs, one per line. Read by packaging/build.sh and added to the
+# module's Depends. Comments and blank lines ignored.
+#
+# The module refuses to prepare a disk when a tool is missing rather than half-doing it, but a
+# module that installs and then cannot do the thing it exists for is a poor first impression.
+gdisk
+smartmontools
+
+# nsenter, for reading block devices in the machine's mount namespace rather than this
+# service's sandboxed one. Part of the base system, but depended on explicitly since the module
+# would otherwise report its own bind mounts as if they were the machine's.
+util-linux

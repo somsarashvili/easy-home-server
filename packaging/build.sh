@@ -355,6 +355,21 @@ EOF
     echo "    contracts:${contract_depends#,}" >&2
   fi
 
+  # System packages the module needs, declared next to the module rather than listed here: the
+  # module knows what it shells out to, and a list kept in the build script goes stale.
+  local system_depends=""
+
+  if [[ -f "${project_dir}/debian-depends" ]]; then
+    while read -r package; do
+      [[ -z "${package}" || "${package}" == \#* ]] && continue
+      system_depends="${system_depends}, ${package}"
+    done < "${project_dir}/debian-depends"
+
+    if [[ -n "${system_depends}" ]]; then
+      echo "    system:${system_depends#,}" >&2
+    fi
+  fi
+
   # Architecture: all — the module is IL, so one package serves amd64 and arm64 alike. The
   # dependency on the versioned SDK contract, not on a host version, is what lets host and
   # modules be upgraded independently as long as the contract holds.
@@ -366,7 +381,7 @@ Priority: optional
 Architecture: all
 Maintainer: ${MAINTAINER}
 Installed-Size: ${installed_kb}
-Depends: easyhomeserver-sdk-${SDK_CONTRACT_MAJOR}${contract_depends}
+Depends: easyhomeserver-sdk-${SDK_CONTRACT_MAJOR}${contract_depends}${system_depends}
 Description: ${module_id} module for EasyHomeServer
  Adds the ${module_id} module to the EasyHomeServer management tool.
  .
