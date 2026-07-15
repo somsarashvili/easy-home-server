@@ -49,11 +49,15 @@ public sealed class MergerFsReader(ILogger<MergerFsReader> logger)
     {
         try
         {
+            // Every mount point on the machine, so a branch can be told from a directory wearing
+            // its name. Read once for all pools rather than per branch.
+            var mountTargets = ReadMountTargets();
+
             var builder = ImmutableArray.CreateBuilder<MergerFsPool>();
 
             foreach (var mount in ReadMergerFsMounts())
             {
-                builder.Add(ReadPool(mount.MountPoint, mount.Source));
+                builder.Add(ReadPool(mount.MountPoint, mount.Source, mountTargets));
             }
 
             return builder.ToImmutable();
@@ -67,7 +71,7 @@ public sealed class MergerFsReader(ILogger<MergerFsReader> logger)
     }
 
     /// <summary>Reads one pool, asking the running mergerfs before trusting anything else.</summary>
-    private MergerFsPool ReadPool(string mountPoint, string source)
+    private MergerFsPool ReadPool(string mountPoint, string source, HashSet<string> mountTargets)
     {
         var controlFile = Path.Combine(mountPoint, ControlFileName);
 
@@ -88,7 +92,7 @@ public sealed class MergerFsReader(ILogger<MergerFsReader> logger)
         return new MergerFsPool
         {
             MountPoint = mountPoint,
-            Branches = ParseBranches(branchList),
+            Branches = ParseBranches(branchList, mountTargets),
             CreatePolicy = Xattr.TryGet(controlFile, CreatePolicyKey).NullIfEmpty(),
             MinFreeSpaceBytes = ParseLong(Xattr.TryGet(controlFile, MinFreeSpaceKey)),
             MoveOnEnoSpc = ParseMoveOnEnoSpc(Xattr.TryGet(controlFile, MoveOnEnoSpcKey)),
@@ -104,7 +108,7 @@ public sealed class MergerFsReader(ILogger<MergerFsReader> logger)
     /// Order is kept exactly as mergerfs gives it, because it is meaningful: <c>ff</c> means
     /// "first found", and reordering this list would misreport which disk new files land on.
     /// </remarks>
-    private ImmutableArray<PoolBranch> ParseBranches(string? branchList)
+    private ImmutableArray<PoolBranch> ParseBranches(string? branchList, HashSet<string> mountTargets)
     {
         if (string.IsNullOrWhiteSpace(branchList))
         {
@@ -134,6 +138,7 @@ public sealed class MergerFsReader(ILogger<MergerFsReader> logger)
                 Mode = ParseMode(mode),
                 TotalBytes = total,
                 AvailableBytes = available,
+                IsDiskMounted = mountTargets.Contains(path),
             });
         }
 
@@ -206,6 +211,33 @@ public sealed class MergerFsReader(ILogger<MergerFsReader> logger)
         long.TryParse(value?.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
             ? parsed
             : null;
+
+    /// <summary>
+    /// Every path the machine has something mounted on.
+    /// </summary>
+    /// <remarks>
+    /// Used to tell a live branch from an empty directory left behind when its disk went away. The
+    /// alternative — comparing the branch's device to the root's — would also flag someone who
+    /// deliberately pooled directories on one filesystem, which is odd but legitimate.
+    /// </remarks>
+    private HashSet<string> ReadMountTargets()
+    {
+        var targets = new HashSet<string>(StringComparer.Ordinal);
+
+        var path = File.Exists(InitMountInfo) ? InitMountInfo : SelfMountInfo;
+
+        foreach (var line in File.ReadLines(path))
+        {
+            var fields = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+            if (fields.Length > 4)
+            {
+                targets.Add(Unescape(fields[4]));
+            }
+        }
+
+        return targets;
+    }
 
     /// <summary>Finds the mergerfs mounts in the machine's mount table.</summary>
     private IEnumerable<(string MountPoint, string Source)> ReadMergerFsMounts()

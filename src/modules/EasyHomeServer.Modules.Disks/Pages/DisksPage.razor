@@ -120,21 +120,22 @@ else
                 </div>
             </div>
 
-            @if (disk.Children.Length == 0)
+            @if (disk.Children.Length == 0 && disk.FileSystem is { } wholeDiskFs)
             {
+                @* A filesystem written straight to the disk with no partition table. Unusual
+                   elsewhere, standard on the machine this targets — so it is explained, and then
+                   listed below exactly like a partition, because it is just as mountable. *@
                 <MudAlert Severity="Severity.Normal" Variant="Variant.Outlined" Dense="true" Class="mt-3">
                     <MudText Typo="Typo.body2">
-                        @if (disk.FileSystem is { } fs)
-                        {
-                            @* A filesystem written straight to the disk with no partition table.
-                               Unusual but legal, and worth naming rather than showing an empty box. *@
-                            <span>No partitions — a @fs filesystem is written directly to the disk.</span>
-                        }
-                        else
-                        {
-                            <span>Nothing on it. Prepare it to make it usable.</span>
-                        }
+                        No partition table — the @wholeDiskFs filesystem is written directly to the disk.
                     </MudText>
+                </MudAlert>
+            }
+
+            @if (!disk.Volumes.Any())
+            {
+                <MudAlert Severity="Severity.Normal" Variant="Variant.Outlined" Dense="true" Class="mt-3">
+                    <MudText Typo="Typo.body2">Nothing on it. Prepare it to make it usable.</MudText>
                 </MudAlert>
             }
             else
@@ -142,7 +143,7 @@ else
                 <MudSimpleTable Dense="true" Hover="true" Elevation="0" Class="dsk-table mt-2">
                     <thead>
                         <tr>
-                            <th>Partition</th>
+                            <th>Volume</th>
                             <th>Filesystem</th>
                             <th class="dsk-numeric">Size</th>
                             <th>Mounted at</th>
@@ -151,7 +152,7 @@ else
                         </tr>
                     </thead>
                     <tbody>
-                        @foreach (var part in disk.Children)
+                        @foreach (var part in disk.Volumes)
                         {
                             <tr>
                                 <td>
@@ -325,6 +326,11 @@ else
 
     private async Task Unmount(BlockDevice device)
     {
+        if (!await ConfirmUnmountingPoolBranchAsync(device))
+        {
+            return;
+        }
+
         _busy = true;
 
         try
@@ -353,6 +359,44 @@ else
         {
             _busy = false;
         }
+    }
+
+    /// <summary>
+    /// Warns before unmounting a disk a pool is using, and returns whether to go ahead.
+    /// </summary>
+    /// <remarks>
+    /// Unmounting a branch does not stop the pool. mergerfs keeps the branch, the now-empty
+    /// directory underneath it belongs to the root filesystem, and every file the create policy
+    /// sends there fills the system disk — while SnapRAID goes on believing those files are on the
+    /// data disk whose name the path still carries. Nothing about the result looks wrong until the
+    /// system disk is full, so the warning has to come before rather than after.
+    /// </remarks>
+    private async Task<bool> ConfirmUnmountingPoolBranchAsync(BlockDevice device)
+    {
+        if (device.MountPoint is not { } mountPoint
+            || _snapshot?.PoolContaining(mountPoint) is not { } pool)
+        {
+            return true;
+        }
+
+        var parameters = new DialogParameters<ConfirmDialog>
+        {
+            { dialog => dialog.Title, $"Unmount {device.Name}?" },
+            {
+                dialog => dialog.Message,
+                $"{mountPoint} is a branch of the pool at {pool.MountPoint}, and the pool stays up "
+                + "without it. Its path becomes an empty directory on the system disk, so files "
+                + "written to that branch will fill the system disk rather than this one — and "
+                + "SnapRAID will record them against a disk they are not on. Remove the branch from "
+                + "the pool first unless this is deliberate."
+            },
+            { dialog => dialog.ConfirmText, "Unmount anyway" },
+        };
+
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>($"Unmount {device.Name}", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        return await dialog.Result is { Canceled: false };
     }
 
     private async Task PrepareDisk(BlockDevice disk)

@@ -246,10 +246,7 @@ public sealed partial class MountManager(ISystemRunner systemRunner, DisksOption
     /// </remarks>
     public bool IsInFstab(BlockDevice device)
     {
-        if (device.Uuid is not { Length: > 0 } uuid)
-        {
-            return false;
-        }
+        ArgumentNullException.ThrowIfNull(device);
 
         try
         {
@@ -267,11 +264,10 @@ public sealed partial class MountManager(ISystemRunner systemRunner, DisksOption
                     continue;
                 }
 
-                // Matches the UUID token exactly rather than by substring: fstab may reference the
-                // device path or a label, and a UUID is a distinctive enough string that a
-                // substring hit elsewhere would be a bug rather than a coincidence.
-                if (trimmed.Split(' ', '\t').FirstOrDefault() is { } source
-                    && source.Equals($"UUID={uuid}", StringComparison.OrdinalIgnoreCase))
+                // The first field is the source. Matched whole rather than by substring: a
+                // LABEL=data1 entry must not answer for a disk labelled data10.
+                if (trimmed.Split(' ', '\t').FirstOrDefault() is { Length: > 0 } source
+                    && IsSourceFor(source, device))
                 {
                     return true;
                 }
@@ -285,6 +281,38 @@ public sealed partial class MountManager(ISystemRunner systemRunner, DisksOption
 
             return false;
         }
+    }
+
+    /// <summary>
+    /// Whether an fstab source field names this device.
+    /// </summary>
+    /// <remarks>
+    /// Every form fstab actually uses, not just the one this module writes. Matching UUID alone
+    /// marked the target machine's entire array — mounted by <c>LABEL=</c>, as most hand-built
+    /// arrays are — as temporary, telling someone their mounts vanish at the next reboot when they
+    /// have survived every previous one. A false alarm about persistence is worse than none: it
+    /// invites fixing something that is not broken.
+    /// </remarks>
+    private static bool IsSourceFor(string source, BlockDevice device)
+    {
+        // A UUID is hex and case-insensitive; a filesystem label is neither.
+        if (device.Uuid is { Length: > 0 } uuid
+            && (source.Equals($"UUID={uuid}", StringComparison.OrdinalIgnoreCase)
+                || source.Equals($"/dev/disk/by-uuid/{uuid}", StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        if (device.Label is { Length: > 0 } label
+            && (source.Equals($"LABEL={label}", StringComparison.Ordinal)
+                || source.Equals($"/dev/disk/by-label/{label}", StringComparison.Ordinal)))
+        {
+            return true;
+        }
+
+        // A bare device path is fragile — /dev/vdf is not promised to be the same disk next boot —
+        // but it is still an entry, and it does still come back.
+        return device.Path is { Length: > 0 } path && source.Equals(path, StringComparison.Ordinal);
     }
 
     /// <summary>

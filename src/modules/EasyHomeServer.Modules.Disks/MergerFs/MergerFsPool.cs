@@ -42,6 +42,22 @@ public sealed record PoolBranch
 
     /// <summary>Whether the branch is present and readable right now.</summary>
     public bool IsPresent => TotalBytes is not null;
+
+    /// <summary>
+    /// Whether a filesystem is actually mounted at the branch's path.
+    /// </summary>
+    /// <remarks>
+    /// The difference between a branch and a directory that merely has its name. When a branch's
+    /// disk is not mounted, the path still exists — as an empty directory on the root filesystem —
+    /// so mergerfs keeps the branch, statfs answers with the root disk's numbers, and the branch
+    /// reads as healthy and enormous. Writes routed to it then fill the system disk.
+    /// </remarks>
+    public required bool IsDiskMounted { get; init; }
+
+    /// <summary>
+    /// Whether this branch is a directory on the root filesystem standing in for a missing disk.
+    /// </summary>
+    public bool IsMissingDisk => !IsDiskMounted;
 }
 
 /// <summary>
@@ -85,11 +101,18 @@ public sealed record MergerFsPool
     /// <summary>Whether the running mergerfs answered, rather than the details being guessed.</summary>
     public required bool ConfigReadFromRuntime { get; init; }
 
-    /// <summary>Combined size of every readable branch.</summary>
-    public long TotalBytes => Branches.Sum(b => b.TotalBytes ?? 0);
+    /// <summary>
+    /// Combined size of every branch whose disk is really there.
+    /// </summary>
+    /// <remarks>
+    /// A branch with no disk mounted answers with the root filesystem's size, so counting it adds
+    /// the whole system disk to the pool's total and reports a pool larger than its disks. The
+    /// space is not the pool's to offer, and the branch is reported as broken separately.
+    /// </remarks>
+    public long TotalBytes => Branches.Where(b => b.IsDiskMounted).Sum(b => b.TotalBytes ?? 0);
 
-    /// <summary>Combined free space of every readable branch.</summary>
-    public long AvailableBytes => Branches.Sum(b => b.AvailableBytes ?? 0);
+    /// <summary>Combined free space of every branch whose disk is really there.</summary>
+    public long AvailableBytes => Branches.Where(b => b.IsDiskMounted).Sum(b => b.AvailableBytes ?? 0);
 
     /// <summary>Combined space in use.</summary>
     public long UsedBytes => TotalBytes - AvailableBytes;
@@ -99,6 +122,16 @@ public sealed record MergerFsPool
 
     /// <summary>Branches listed by mergerfs that could not be read — a disk that did not come back.</summary>
     public IEnumerable<PoolBranch> MissingBranches => Branches.Where(b => !b.IsPresent);
+
+    /// <summary>
+    /// Branches whose disk is not mounted, so writes to them land on the system disk.
+    /// </summary>
+    /// <remarks>
+    /// Reported loudly because nothing else does. The pool works, the branch shows space, and the
+    /// files quietly go to the wrong disk — where SnapRAID does not protect them either, since it
+    /// believes they are on the data disk whose name the path carries.
+    /// </remarks>
+    public IEnumerable<PoolBranch> BranchesWithoutDisk => Branches.Where(b => b.IsMissingDisk);
 
     /// <summary>
     /// The branches a create policy is allowed to choose from.

@@ -83,6 +83,21 @@ public sealed record BlockDevice
     /// <summary>True when it is mounted somewhere.</summary>
     public bool IsMounted => MountPoints.Length > 0;
 
+    /// <summary>
+    /// The filesystems on this disk that can be mounted.
+    /// </summary>
+    /// <remarks>
+    /// Its partitions, or the disk itself when a filesystem is written straight to it with no
+    /// partition table. That second case looks exotic and is not: it is how every data disk on the
+    /// machine this was built for is formatted. Treating only partitions as mountable leaves such a
+    /// disk with no mount point, no usage, and no way to unmount it — while the Prepare button
+    /// still says to unmount it first.
+    /// </remarks>
+    public IEnumerable<BlockDevice> Volumes =>
+        Children.Length > 0 ? Children
+        : FileSystem is not null ? [this]
+        : [];
+
     /// <summary>First mount point, or null.</summary>
     public string? MountPoint => MountPoints.Length > 0 ? MountPoints[0] : null;
 

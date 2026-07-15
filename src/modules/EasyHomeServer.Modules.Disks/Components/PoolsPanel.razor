@@ -98,6 +98,26 @@
             &middot; @Format.Percent(pool.UsedFraction * 100)
         </MudText>
 
+        @if (pool.BranchesWithoutDisk.Any())
+        {
+            @*
+                The worst state this panel can find, and the quietest. The pool works, the branch
+                reports the root disk's space, and files written there fill the system disk while
+                SnapRAID records them against a data disk they were never on.
+            *@
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">
+                <MudText Typo="Typo.subtitle2">
+                    @BranchList(pool.BranchesWithoutDisk) has no disk mounted
+                </MudText>
+                <MudText Typo="Typo.body2" Class="mt-1">
+                    The path is there but nothing is mounted on it, so it is an empty directory on
+                    the system disk. The pool keeps serving, and anything written to that branch
+                    fills the system disk instead of the data disk — where no parity protects it
+                    either. Mount the disk, or remove the branch from the pool.
+                </MudText>
+            </MudAlert>
+        }
+
         @if (!pool.AcceptsNewFiles && pool.Branches.Any(b => b.IsPresent))
         {
             @*
@@ -162,6 +182,14 @@
                             </MudTooltip>
                         }
 
+                        @if (branch.IsMissingDisk)
+                        {
+                            <MudTooltip Text="Nothing is mounted here. The path is an empty directory on the system disk, and writes to it fill that disk.">
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                         Color="Color.Error" Class="ml-2 dsk-chip">no disk</MudChip>
+                            </MudTooltip>
+                        }
+
                         @if (IsBelowMinFree(pool, branch))
                         {
                             <MudTooltip Text="@($"Below minfreespace ({Format.Bytes(pool.MinFreeSpaceBytes)}), so mergerfs will not put new files here. Existing files are still readable and writable.")">
@@ -175,10 +203,17 @@
                         <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
                                  Color="@ModeColor(branch.Mode)" Class="dsk-chip">@ModeLabel(branch.Mode)</MudChip>
                     </td>
-                    <td class="dsk-numeric">@Format.Bytes(branch.TotalBytes)</td>
-                    <td class="dsk-numeric">@Format.Bytes(branch.UsedBytes)</td>
+                    @* A branch with no disk reports the system disk's size and free space, since
+                       that is the filesystem the path really sits on. Showing those numbers would
+                       dress the fault as a healthy, roomy branch. *@
+                    <td class="dsk-numeric">@(branch.IsMissingDisk ? "—" : Format.Bytes(branch.TotalBytes))</td>
+                    <td class="dsk-numeric">@(branch.IsMissingDisk ? "—" : Format.Bytes(branch.UsedBytes))</td>
                     <td>
-                        @if (branch.UsedFraction is { } fraction)
+                        @if (branch.IsMissingDisk)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Error">disk not mounted</MudText>
+                        }
+                        else if (branch.UsedFraction is { } fraction)
                         {
                             <div class="d-flex align-center">
                                 <MudProgressLinear Color="@UsageColor(fraction * 100)" Rounded="true"
@@ -304,6 +339,19 @@
             // The pool exists now; re-read so the new mount shows without waiting for the tick.
             await RefreshAsync();
         }
+    }
+
+    /// <summary>Names branches in a sentence: "/mnt/data3" or "/mnt/data2 and /mnt/data3".</summary>
+    private static string BranchList(IEnumerable<PoolBranch> branches)
+    {
+        var paths = branches.Select(branch => branch.Path).ToList();
+
+        return paths.Count switch
+        {
+            0 => string.Empty,
+            1 => paths[0],
+            _ => string.Join(", ", paths.Take(paths.Count - 1)) + " and " + paths[^1],
+        };
     }
 
     private static Color UsageColor(double percent) => percent switch
