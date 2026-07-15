@@ -31,6 +31,17 @@ public sealed class DisksOptions
     /// <summary>Where snapraid.conf lives. Its absence is how this module decides there is no array.</summary>
     public string SnapRaidConfigPath { get; set; } = "/etc/snapraid.conf";
 
+    /// <summary>
+    /// Where the copy of SnapRAID's content file that does not live on a data disk is kept.
+    /// </summary>
+    public string SnapRaidContentRoot { get; set; } = "/var/snapraid";
+
+    /// <summary>
+    /// Whether the UI may create pools and arrays. Separate from <see cref="AllowFormat"/>: this
+    /// writes configuration and destroys nothing, so it is not the same risk.
+    /// </summary>
+    public bool AllowPoolControl { get; set; } = true;
+
     private double _snapRaidPollIntervalSeconds = 600;
 
     /// <summary>

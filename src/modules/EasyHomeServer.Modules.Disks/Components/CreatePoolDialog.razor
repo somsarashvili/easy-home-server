@@ -1,0 +1,343 @@
+@using EasyHomeServer.Modules.Disks.MergerFs
+@using EasyHomeServer.Modules.Disks.SnapRaid
+
+@inject PoolManager Pools
+@inject SnapRaidConfigWriter ArrayWriter
+@inject SnapRaidCli SnapRaid
+
+@*
+    Creates the pool and the array together. They are separate files that no tool reconciles, and a
+    disk pooled but not protected looks exactly like one that is — so offering them as one step is
+    the point of this dialog, not a convenience.
+*@
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-4">
+            A pool presents several disks as one directory tree. Nothing is formatted or moved:
+            the branches keep their own filesystems, and removing the pool leaves every file where
+            it is.
+        </MudText>
+
+        <MudTextField @bind-Value="_mountPoint"
+                      Label="Mount point"
+                      Variant="Variant.Outlined"
+                      Immediate="true"
+                      HelperText="Where the pooled tree appears, e.g. /data/storage"
+                      Class="mb-4" />
+
+        <MudText Typo="Typo.subtitle2">Branches</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-2">
+            Order matters: <code>ff</code> fills the first with room before moving on, which is how
+            an SSD goes first.
+        </MudText>
+
+        @if (Candidates.Count == 0)
+        {
+            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-4">
+                No mounted filesystems are available to pool. Prepare and mount disks on the Disks
+                tab first; the system disk and disks already in a pool are not offered.
+            </MudAlert>
+        }
+
+        @foreach (var candidate in Candidates)
+        {
+            <div class="d-flex align-center">
+                <MudCheckBox T="bool"
+                             Value="@_selected.Contains(candidate.Path)"
+                             ValueChanged="@(checkedNow => Toggle(candidate.Path, checkedNow))"
+                             Dense="true"
+                             Color="Color.Primary" />
+                <MudText Typo="Typo.body2" Class="dsk-mono mr-2">@candidate.Path</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    @candidate.Device &middot; @Format.Bytes(candidate.SizeBytes)
+                    @(candidate.IsRotational ? "" : " · SSD")
+                </MudText>
+            </div>
+        }
+
+        <MudDivider Class="my-4" />
+
+        <div class="d-flex ga-4">
+            <MudSelect T="string" @bind-Value="_createPolicy" Label="Create policy"
+                       Variant="Variant.Outlined" Class="flex-grow-1">
+                <MudSelectItem T="string" Value="@("ff")">ff — first found (fills one disk, then the next)</MudSelectItem>
+                <MudSelectItem T="string" Value="@("mfs")">mfs — most free space (spreads evenly)</MudSelectItem>
+                <MudSelectItem T="string" Value="@("epmfs")">epmfs — existing path, most free space</MudSelectItem>
+            </MudSelect>
+
+            <MudNumericField T="int" @bind-Value="_minFreeGb" Label="Min free (GB)"
+                             Variant="Variant.Outlined" Min="0" Immediate="true"
+                             HelperText="A branch below this takes no new files"
+                             Class="flex-grow-1" />
+        </div>
+
+        <MudDivider Class="my-4" />
+
+        <MudCheckBox T="bool" @bind-Value="_protect" Dense="true" Color="Color.Primary">
+            Also protect with SnapRAID
+        </MudCheckBox>
+
+        @if (_protect)
+        {
+            @if (_configExists)
+            {
+                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mt-2">
+                    <code>@ConfigPath</code> already exists, so it will be left alone. The pool will
+                    still be created.
+                </MudAlert>
+            }
+            else
+            {
+                <MudText Typo="Typo.body2" Class="mud-text-secondary mt-2 mb-2">
+                    Parity is computed across the data disks. It needs a disk of its own, at least as
+                    large as the biggest data disk.
+                </MudText>
+
+                <MudSelect T="string" @bind-Value="_parityBranch" Label="Parity disk"
+                           Variant="Variant.Outlined" Class="mb-3">
+                    @foreach (var candidate in ParityCandidates)
+                    {
+                        <MudSelectItem T="string" Value="@candidate.Path">
+                            @candidate.Path (@Format.Bytes(candidate.SizeBytes))
+                        </MudSelectItem>
+                    }
+                </MudSelect>
+
+                @*
+                    Which branch is a cache is a choice, not something to infer. An SSD staging
+                    branch that a mover empties should stay out of the array — syncing files that
+                    are about to move costs the work twice. The rotational flag is the obvious hint
+                    and it is right on real hardware, but every virtio disk in a VM claims to spin,
+                    so it seeds the default rather than deciding.
+                *@
+                <MudSelect T="string" @bind-Value="_cacheBranch" Label="Cache branch (left out of the array)"
+                           Variant="Variant.Outlined" Clearable="true" Class="mb-3">
+                    <MudSelectItem T="string" Value="@(null!)">None — protect every branch</MudSelectItem>
+                    @foreach (var branch in SelectedInOrder)
+                    {
+                        <MudSelectItem T="string" Value="@branch">@branch</MudSelectItem>
+                    }
+                </MudSelect>
+
+                @if (DataDiskPreview.Length > 0)
+                {
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                        Protected: @string.Join(", ", DataDiskPreview.Select(d => $"{d.Name} → {d.Path}"))
+                    </MudText>
+                }
+
+                @if (_cacheBranch is { Length: > 0 } cache)
+                {
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-1">
+                        @cache stays out of the array. Files there are protected once they move to a
+                        data disk, so a mover has to run for that to mean anything.
+                    </MudText>
+                }
+            }
+        }
+
+        @if (_problems.Length > 0)
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mt-4">
+                @foreach (var problem in _problems)
+                {
+                    <MudText Typo="Typo.body2">@problem</MudText>
+                }
+            </MudAlert>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cancel" Disabled="_busy">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   Disabled="@(_busy || _selected.Count < 2)"
+                   OnClick="CreateAsync">
+            @(_busy ? "Creating…" : "Create pool")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    /// <summary>One filesystem that could be a branch.</summary>
+    public sealed record Candidate
+    {
+        /// <summary>Where it is mounted.</summary>
+        public required string Path { get; init; }
+
+        /// <summary>The device behind it, for telling two same-sized disks apart.</summary>
+        public required string Device { get; init; }
+
+        /// <summary>Its size.</summary>
+        public required long SizeBytes { get; init; }
+
+        /// <summary>Whether it spins. An SSD is the one worth putting first.</summary>
+        public required bool IsRotational { get; init; }
+    }
+
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>The filesystems on offer, from the same reading the disk list uses.</summary>
+    [Parameter]
+    [EditorRequired]
+    public required IReadOnlyList<Candidate> Candidates { get; set; }
+
+    /// <summary>Where snapraid.conf lives, quoted in the messages that mention it.</summary>
+    [Parameter]
+    public string ConfigPath { get; set; } = "/etc/snapraid.conf";
+
+    private string _mountPoint = "/data/storage";
+    private readonly List<string> _selected = [];
+    private string _createPolicy = "ff";
+    private int _minFreeGb = 20;
+    private bool _protect = true;
+    private string? _parityBranch;
+    private string? _cacheBranch;
+    private bool _configExists;
+    private bool _busy;
+    private ImmutableArray<string> _problems = [];
+
+    protected override void OnInitialized() => _configExists = ArrayWriter.ConfigExists;
+
+    /// <summary>Selected branches, in the order the list offers them.</summary>
+    private ImmutableArray<string> SelectedInOrder =>
+        [.. Candidates.Select(c => c.Path).Where(_selected.Contains)];
+
+    /// <summary>Disks that could hold parity: anything not chosen as a branch.</summary>
+    private IEnumerable<Candidate> ParityCandidates =>
+        Candidates.Where(c => !_selected.Contains(c.Path));
+
+    /// <summary>The data disks the array would protect, named d1, d2, d3 in branch order.</summary>
+    private ImmutableArray<SnapRaidDataDisk> DataDiskPreview =>
+    [
+        .. SelectedInOrder
+            .Where(path => path != _cacheBranch)
+            .Select((path, index) => new SnapRaidDataDisk
+            {
+                Name = $"d{index + 1}",
+                Path = path,
+            }),
+    ];
+
+    private void Toggle(string path, bool selected)
+    {
+        if (selected)
+        {
+            _selected.Add(path);
+        }
+        else
+        {
+            _selected.Remove(path);
+        }
+
+        // Parity cannot be a branch; drop it if it just became one.
+        if (_parityBranch is { } parity && _selected.Contains(parity))
+        {
+            _parityBranch = null;
+        }
+
+        // A cache that is no longer a branch is not a cache.
+        if (_cacheBranch is { } cache && !_selected.Contains(cache))
+        {
+            _cacheBranch = null;
+        }
+
+        SuggestCacheBranch();
+    }
+
+    /// <summary>
+    /// Proposes the first branch as the cache when it does not spin.
+    /// </summary>
+    /// <remarks>
+    /// Only ever fills an empty choice, so it cannot argue with someone who has already answered.
+    /// </remarks>
+    private void SuggestCacheBranch()
+    {
+        if (_cacheBranch is not null || SelectedInOrder.Length < 3)
+        {
+            return;
+        }
+
+        if (Candidates.FirstOrDefault(c => c.Path == SelectedInOrder[0]) is { IsRotational: false } first)
+        {
+            _cacheBranch = first.Path;
+        }
+    }
+
+    private async Task CreateAsync()
+    {
+        _busy = true;
+        _problems = [];
+
+        try
+        {
+            var spec = new PoolSpec
+            {
+                MountPoint = _mountPoint,
+                Branches = SelectedInOrder,
+                CreatePolicy = _createPolicy,
+                MinFreeSpaceBytes = (long)_minFreeGb * 1024 * 1024 * 1024,
+                MoveOnEnoSpc = true,
+            };
+
+            var arraySpec = BuildArraySpec();
+
+            // Validate both before doing either. Creating the pool and then failing on the array
+            // would leave the half-built state this dialog exists to avoid.
+            _problems =
+            [
+                .. Pools.Validate(spec),
+                .. arraySpec is not null ? ArrayWriter.Validate(arraySpec) : [],
+            ];
+
+            if (_problems.Length > 0)
+            {
+                return;
+            }
+
+            var poolResult = await Pools.CreateAsync(spec);
+
+            if (!poolResult.Succeeded)
+            {
+                _problems = [poolResult.Message];
+
+                return;
+            }
+
+            var message = poolResult.Message;
+
+            if (arraySpec is not null)
+            {
+                var arrayResult = await ArrayWriter.CreateAsync(arraySpec);
+
+                // The pool is already up; a failed config is worth reporting, not rolling back.
+                message = arrayResult.Succeeded
+                    ? $"{poolResult.Message} {arrayResult.Message}"
+                    : $"{poolResult.Message} The array was not configured: {arrayResult.Message}";
+            }
+
+            MudDialog.Close(DialogResult.Ok(message));
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private ArraySpec? BuildArraySpec()
+    {
+        if (!_protect || _configExists || _parityBranch is not { Length: > 0 } parity)
+        {
+            return null;
+        }
+
+        return new ArraySpec
+        {
+            ParityFiles = [$"{parity}/snapraid.parity"],
+            DataDisks = DataDiskPreview,
+        };
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

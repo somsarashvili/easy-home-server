@@ -1,6 +1,23 @@
 @using EasyHomeServer.Modules.Disks.MergerFs
 
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject DisksOptions Options
+@inject DiskPoller Poller
+
 @* The mergerfs pools: what they present, and which disks are actually behind them. *@
+
+@if (Options.AllowPoolControl)
+{
+    <div class="d-flex justify-end mb-3">
+        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Add"
+                   Disabled="_busy"
+                   OnClick="CreatePoolAsync">
+            Create pool
+        </MudButton>
+    </div>
+}
 
 @if (Snapshot.Pools.Length == 0)
 {
@@ -175,6 +192,69 @@
     [Parameter]
     [EditorRequired]
     public required DiskSnapshot Snapshot { get; set; }
+
+    private bool _busy;
+
+    /// <summary>
+    /// The filesystems that could become branches.
+    /// </summary>
+    /// <remarks>
+    /// A mounted filesystem that is not the running system and is not already pooled. The system
+    /// disk is excluded because pooling it would put the root filesystem behind a FUSE mount; a
+    /// disk already in a pool is excluded because two mergerfs mounts over one branch is a way to
+    /// lose track of where a file really is. Rotational last, so an SSD lands first in an ff pool
+    /// where it belongs.
+    /// </remarks>
+    private IReadOnlyList<CreatePoolDialog.Candidate> BranchCandidates =>
+    [
+        .. Snapshot.Devices
+            .SelectMany(Flatten)
+            .Where(device => device is { IsMounted: true, IsSystemDisk: false }
+                             && device.Kind is DeviceKind.Disk or DeviceKind.Partition)
+            .SelectMany(device => device.MountPoints.Select(mount => (device, mount)))
+            .Where(entry => Snapshot.PoolContaining(entry.mount) is null
+                            && !Snapshot.Pools.Any(pool => pool.MountPoint == entry.mount))
+            .OrderBy(entry => entry.device.IsRotational)
+            .ThenBy(entry => entry.mount, StringComparer.Ordinal)
+            .Select(entry => new CreatePoolDialog.Candidate
+            {
+                Path = entry.mount,
+                Device = entry.device.Name,
+                SizeBytes = entry.device.FsSizeBytes ?? entry.device.SizeBytes,
+                IsRotational = entry.device.IsRotational,
+            }),
+    ];
+
+    private async Task CreatePoolAsync()
+    {
+        var parameters = new DialogParameters<CreatePoolDialog>
+        {
+            { dialog => dialog.Candidates, BranchCandidates },
+            { dialog => dialog.ConfigPath, Options.SnapRaidConfigPath },
+        };
+
+        var dialog = await DialogService.ShowAsync<CreatePoolDialog>("Create pool", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: string message })
+        {
+            Snackbar.Add(message, Severity.Success);
+
+            _busy = true;
+
+            try
+            {
+                // The pool exists now; re-read so the new mount shows without waiting for the tick.
+                await Poller.RefreshAsync();
+            }
+            finally
+            {
+                _busy = false;
+            }
+        }
+    }
 
     private static Color UsageColor(double percent) => percent switch
     {

@@ -34,7 +34,9 @@ public sealed class DisksModule : IModule
         services.AddSingleton<MountManager>();
         services.AddSingleton<DiskFormatter>();
         services.AddSingleton<MergerFsReader>();
+        services.AddSingleton<PoolManager>();
         services.AddSingleton<SnapRaidCli>();
+        services.AddSingleton<SnapRaidConfigWriter>();
 
         services.AddModuleWorker<DiskPoller>();
         services.AddModuleWorker<SnapRaidPoller>();
