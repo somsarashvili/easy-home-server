@@ -158,14 +158,41 @@
                                                  ValueChanged="@(v => SetAdvertised(service, v))"
                                                  Label="Advertise on the network (mDNS)" />
 
-                                    @if (IsAdvertised(service) && IsLanNetwork(service.Network))
+                                    @if (IsAdvertised(service))
                                     {
-                                        <MudTextField Value="@GetLabel(service, "easyhomeserver.avahi.port")" Label="Port to advertise"
-                                                      Immediate="true" Class="ml-8"
-                                                      Style="max-width:14rem"
-                                                      HelperText="It has no published ports, so name the port it listens on."
-                                                      ValueChanged="@((string v) => SetLabel(service, "easyhomeserver.avahi.port", v))"
-                                                      T="string" />
+                                        <MudGrid Class="ml-4">
+                                            @if (IsLanNetwork(service.Network))
+                                            {
+                                                @* Only meaningful for a container with its own LAN
+                                                   address. One behind a published port answers on
+                                                   the host's name, which is not this service's to
+                                                   rename. *@
+                                                <MudItem xs="12" sm="6">
+                                                    <MudTextField Value="@GetLabel(service, AvahiLabels.HostName)"
+                                                                  T="string" Immediate="true"
+                                                                  Label="Hostname"
+                                                                  Placeholder="@DefaultHostName(service)"
+                                                                  Error="@(HostNameError(service) is not null)"
+                                                                  ErrorText="@HostNameError(service)"
+                                                                  HelperText="@($"Reachable at {EffectiveHostName(service)}. Defaults to the container name, which Compose builds as project-service-1.")"
+                                                                  ValueChanged="@((string v) => SetLabel(service, AvahiLabels.HostName, v))" />
+                                                </MudItem>
+                                                <MudItem xs="12" sm="6">
+                                                    <MudTextField Value="@GetLabel(service, AvahiLabels.Port)" T="string"
+                                                                  Label="Port to advertise" Immediate="true"
+                                                                  HelperText="It has no published ports, so name the port it listens on."
+                                                                  ValueChanged="@((string v) => SetLabel(service, AvahiLabels.Port, v))" />
+                                                </MudItem>
+                                            }
+
+                                            <MudItem xs="12" sm="6">
+                                                <MudTextField Value="@GetLabel(service, AvahiLabels.Name)" T="string"
+                                                              Label="Advertised name" Immediate="true"
+                                                              Placeholder="@EffectiveDisplayName(service)"
+                                                              HelperText="How it appears when browsing the network. Free text; %h is this server's hostname."
+                                                              ValueChanged="@((string v) => SetLabel(service, AvahiLabels.Name, v))" />
+                                            </MudItem>
+                                        </MudGrid>
                                     }
                                 </MudItem>
                             </MudGrid>
@@ -462,20 +489,52 @@
     }
 
     private static bool IsAdvertised(ComposeServiceSpec service) =>
-        service.Labels.TryGetValue("easyhomeserver.avahi.enable", out var value)
+        service.Labels.TryGetValue(AvahiLabels.Enable, out var value)
         && value.Equals("true", StringComparison.OrdinalIgnoreCase);
 
     private void SetAdvertised(ComposeServiceSpec service, bool advertised)
     {
         if (advertised)
         {
-            service.Labels["easyhomeserver.avahi.enable"] = "true";
+            service.Labels[AvahiLabels.Enable] = "true";
         }
         else
         {
-            service.Labels.Remove("easyhomeserver.avahi.enable");
-            service.Labels.Remove("easyhomeserver.avahi.port");
+            // Clears the whole group: leaving an orphaned hostname behind on a service that is no
+            // longer advertised is confusing the next time someone opens the file.
+            service.Labels.Remove(AvahiLabels.Enable);
+            service.Labels.Remove(AvahiLabels.Port);
+            service.Labels.Remove(AvahiLabels.HostName);
+            service.Labels.Remove(AvahiLabels.Name);
         }
+    }
+
+    /// <summary>The container name Compose will generate, which is what the hostname defaults to.</summary>
+    private string DefaultHostName(ComposeServiceSpec service) =>
+        AvahiLabels.PredictContainerName(IsNew ? (_name.Length > 0 ? _name : "project") : ProjectName, service.Name);
+
+    /// <summary>What the service will actually be reachable at, shown live as the field is typed.</summary>
+    private string EffectiveHostName(ComposeServiceSpec service)
+    {
+        var requested = GetLabel(service, AvahiLabels.HostName);
+
+        return $"{(requested.Length > 0 ? requested : DefaultHostName(service))}.local".ToLowerInvariant();
+    }
+
+    private static string? HostNameError(ComposeServiceSpec service) =>
+        AvahiLabels.ValidateHostName(GetLabel(service, AvahiLabels.HostName));
+
+    /// <summary>What will appear when browsing, if the name field is left empty.</summary>
+    private string EffectiveDisplayName(ComposeServiceSpec service)
+    {
+        if (IsLanNetwork(service.Network))
+        {
+            // Mirrors the Avahi module: with its own address it is its own machine, so the name
+            // is the hostname rather than "x on this-server".
+            return EffectiveHostName(service)[..^".local".Length];
+        }
+
+        return $"{DefaultHostName(service)} on %h";
     }
 
     private static string GetLabel(ComposeServiceSpec service, string key) =>

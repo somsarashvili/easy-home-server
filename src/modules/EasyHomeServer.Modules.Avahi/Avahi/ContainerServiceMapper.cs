@@ -28,6 +28,23 @@ public static class ContainerServiceMapper
     /// <summary>Overrides the advertised name. Defaults to the container name.</summary>
     public const string NameLabel = "easyhomeserver.avahi.name";
 
+    /// <summary>
+    /// Overrides the <c>.local</c> hostname of a container that holds its own LAN address.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Without it the hostname comes from the container name, and Compose names containers
+    /// <c>project-service-1</c> — so a project "mynginx" with a service "web" is reachable at the
+    /// unlovely <c>mynginx-web-1.local</c>. This is how it becomes <c>mynginx.local</c>.
+    /// </para>
+    /// <para>
+    /// Give the bare label, without <c>.local</c>, which is appended. Ignored for containers
+    /// reached through a published port: those answer on the host's own name, and inventing a
+    /// second name for the host is a different feature.
+    /// </para>
+    /// </remarks>
+    public const string HostNameLabel = "easyhomeserver.avahi.hostname";
+
     /// <summary>DNS-SD service type. Defaults to <c>_http._tcp</c>.</summary>
     public const string TypeLabel = "easyhomeserver.avahi.type";
 
@@ -168,7 +185,25 @@ public static class ContainerServiceMapper
                        + $"({string.Join(", ", container.ExposedPorts)}). Add {PortLabel} to choose one.");
         }
 
-        var hostName = $"{SanitiseHostName(container.Name)}.local";
+        // An explicit hostname is validated rather than quietly cleaned up: publishing
+        // "my-nginx.local" to someone who asked for "My NGINX" is a worse outcome than telling
+        // them the rule. The container name, which the operator did not choose for this purpose,
+        // is sanitised instead.
+        string hostName;
+
+        if (container.Labels.TryGetValue(HostNameLabel, out var requested) && requested.Length > 0)
+        {
+            if (ValidateHostName(requested) is { } hostNameError)
+            {
+                return skip($"Label {HostNameLabel}={requested} is not usable: {hostNameError}");
+            }
+
+            hostName = $"{requested.ToLowerInvariant()}.local";
+        }
+        else
+        {
+            hostName = $"{SanitiseHostName(container.Name)}.local";
+        }
 
         var txt = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
 
@@ -188,9 +223,13 @@ public static class ContainerServiceMapper
 
                 // No "on %h" here: the service is not on this host, it is its own machine as far
                 // as the network is concerned.
+                //
+                // Falls back to the hostname before the container name: someone who set the
+                // hostname to "mynginx" wants to see "mynginx" in a browser list, not
+                // "mynginx-web-1".
                 DisplayName = container.Labels.TryGetValue(NameLabel, out var name) && name.Length > 0
                     ? name
-                    : container.Name,
+                    : hostName[..^".local".Length],
                 ServiceType = container.Labels.TryGetValue(TypeLabel, out var type) && type.Length > 0
                     ? type
                     : DefaultServiceType,
@@ -215,6 +254,51 @@ public static class ContainerServiceMapper
         }
 
         return container.ExposedPorts.Length == 1 ? container.ExposedPorts[0] : null;
+    }
+
+    /// <summary>
+    /// Checks a caller-supplied hostname against the DNS label rules, returning why it is
+    /// unusable or null when it is fine.
+    /// </summary>
+    /// <remarks>
+    /// Shared with the UI so the form rejects a bad name while it is being typed, rather than the
+    /// container being silently left unadvertised later. The rules are RFC 1123's: letters,
+    /// digits and hyphens, not starting or ending with a hyphen, 63 characters at most.
+    /// </remarks>
+    public static string? ValidateHostName(string? hostName)
+    {
+        if (string.IsNullOrWhiteSpace(hostName))
+        {
+            return "it is empty.";
+        }
+
+        if (hostName.EndsWith(".local", StringComparison.OrdinalIgnoreCase))
+        {
+            // Appended automatically; accepting it here would publish "x.local.local".
+            return "leave off the .local — it is added automatically.";
+        }
+
+        if (hostName.Contains('.', StringComparison.Ordinal))
+        {
+            return "it cannot contain dots; mDNS names are a single label under .local.";
+        }
+
+        if (hostName.Length > 63)
+        {
+            return "it is longer than 63 characters.";
+        }
+
+        if (!hostName.All(c => char.IsAsciiLetterOrDigit(c) || c == '-'))
+        {
+            return "use only letters, digits and hyphens.";
+        }
+
+        if (hostName.StartsWith('-') || hostName.EndsWith('-'))
+        {
+            return "it cannot start or end with a hyphen.";
+        }
+
+        return null;
     }
 
     /// <summary>

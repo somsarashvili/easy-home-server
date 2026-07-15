@@ -41,3 +41,12 @@
     font-size: 0.78rem;
     line-height: 1.6;
 }
+
+/* The reason a container is not advertised. Allowed to wrap: it is a sentence, and truncating
+   the explanation defeats the point of showing it. */
+.av-reason {
+    max-width: 32rem;
+    margin-top: 0.2rem;
+    line-height: 1.4;
+    white-space: normal;
+}

@@ -152,12 +152,22 @@
                                 }
                                 else
                                 {
-                                    <MudTooltip Text="@mapping.SkipReason">
-                                        <MudChip T="string" Size="Size.Small" Color="@(mapping.IsOptedIn ? Color.Warning : Color.Default)"
-                                                 Variant="Variant.Outlined" Class="av-chip">
-                                            @(mapping.IsOptedIn ? "not advertised" : "not opted in")
-                                        </MudChip>
-                                    </MudTooltip>
+                                    <MudChip T="string" Size="Size.Small" Color="@(mapping.IsOptedIn ? Color.Warning : Color.Default)"
+                                             Variant="Variant.Outlined" Class="av-chip">
+                                        @(mapping.IsOptedIn ? "not advertised" : "not opted in")
+                                    </MudChip>
+
+                                    @* Written out, not hidden behind a tooltip. "Why is my container
+                                       not advertised?" is the only question this table exists to
+                                       answer, and MudTooltip does not even render its text into the
+                                       DOM until hovered — so the answer was invisible to a reader,
+                                       to search, and to a screen reader alike. *@
+                                    @if (mapping.SkipReason is { Length: > 0 } reason)
+                                    {
+                                        <MudText Typo="Typo.caption" Class="mud-text-secondary d-block av-reason">
+                                            @reason
+                                        </MudText>
+                                    }
                                 }
                             </td>
                         </tr>
@@ -167,20 +177,40 @@
 
             <MudExpansionPanels Elevation="0" Class="mt-4">
                 <MudExpansionPanel Text="How to advertise a container">
-                    <pre class="av-code">services:
+                    <pre class="av-code"># Reached through a published port on this server: http://%h.local:8096
+services:
   jellyfin:
     image: jellyfin/jellyfin
     ports:
       - "8096:8096"
     labels:
       @ContainerServiceMapper.EnableLabel: "true"
-      @ContainerServiceMapper.NameLabel: "Jellyfin on %h"     # optional, defaults to the container name
+      @ContainerServiceMapper.NameLabel: "Jellyfin on %h"     # optional, how it appears when browsing
       @ContainerServiceMapper.TypeLabel: "_http._tcp"         # optional, this is the default
       @ContainerServiceMapper.PortLabel: "8096"               # optional, needed only with several ports
-      @ContainerServiceMapper.PathLabel: "/web"               # optional, published as a TXT record</pre>
+      @ContainerServiceMapper.PathLabel: "/web"               # optional, published as a TXT record
+
+# With its own address on the LAN (macvlan): http://jellyfin.local:8096
+# No "ports:" — it does not go through this server at all.
+services:
+  jellyfin:
+    image: jellyfin/jellyfin
+    networks:
+      lan: { ipv4_address: 192.168.1.241 }   # a macvlan network, made on the Docker > Networks tab
+    labels:
+      @ContainerServiceMapper.EnableLabel: "true"
+      @ContainerServiceMapper.HostNameLabel: "jellyfin"       # -> jellyfin.local
+      @ContainerServiceMapper.PortLabel: "8096"               # nothing is published, so name the port
+
+networks:
+  lan:
+    external: true</pre>
                     <MudText Typo="Typo.caption" Class="mud-text-secondary">
                         Labels are set at creation time, so a running container has to be recreated to pick
-                        them up. <code>%h</code> is replaced with the hostname by avahi.
+                        them up. <code>%h</code> is replaced with this server's hostname by avahi.
+                        Without <code>@ContainerServiceMapper.HostNameLabel</code>, a container with its own
+                        address takes its name from the container — which Compose builds as
+                        <code>project-service-1</code>.
                     </MudText>
                 </MudExpansionPanel>
             </MudExpansionPanels>
